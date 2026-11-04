@@ -75,8 +75,12 @@ mount. `rootfs/ubifs.sh` unpacks and repacks it in Docker. See
 [rootfs/README.md](rootfs/README.md).
 
 Adding a package, or changing the kernel or device tree, means building from
-the Luckfox SDK. `sdk/sdk.sh` runs that in Docker and drops the results into
-`images/`. See [sdk/README.md](sdk/README.md).
+the Luckfox SDK. `sdk/sdk.sh` runs that in Docker, following Luckfox's own
+[SDK compilation page](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation).
+It drops `uboot.img`, `boot.img` and `rootfs.img` into `images/` and leaves
+the vendor loader in place, so the rule above still holds: the container is
+built from the vendor image, and the SDK only supplies the partitions you
+chose to rebuild. See [sdk/README.md](sdk/README.md).
 
 [../docs/linux.md](../docs/linux.md) compares all three routes.
 

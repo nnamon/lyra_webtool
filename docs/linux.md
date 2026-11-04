@@ -72,6 +72,13 @@ elsewhere. It cannot add packages, and it cannot change the kernel itself.
 This is the only route that adds packages, changes the kernel config, or
 changes the device tree.
 
+It follows Luckfox's own pages for the Lyra, moved into a container:
+[SDK image compilation](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation)
+and [SDK Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration).
+Take the Lyra pages rather than the Pico ones: the Pico Pro Max page gives the
+menuconfig target as `buildrootconfig`, which this SDK does not accept, and
+warns about uClibc, which this board does not use.
+
 `template/sdk/` runs it in Docker. `template/sdk/README.md` has the setup, the
 disk and time budget, and the two constraints that decide the design: the SDK
 must sit on an ext4 filesystem, so the source lives in a Docker volume, and
@@ -79,16 +86,22 @@ the container must be amd64, because the SDK ships x86_64 host tools.
 
 ```sh
 cd template/sdk
-./sdk.sh init ~/Downloads/Luckfox_Lyra_SDK_250815.tar.gz
+./sdk.sh init ~/Downloads/luckfox-lyra-241213.tar.gz
 ./sdk.sh build
 ./sdk.sh fetch
 ```
 
-`init` selects
+The tarball is a `repo` mirror, not a source tree, so `init` unpacks it and
+then runs `.repo/repo/repo sync -l` to check the tree out before anything can
+build.
+
+It then selects
 `device/rockchip/.chips/rk3506/luckfox_lyra_zero-w_buildroot_spinand_defconfig`,
-the Zero W on SPI NAND with Buildroot. Its `parameter-lyra-spinand.txt` is
-byte for byte the `parameter.txt` in `template/`, which is how we know this is
-the config that built the firmware on your board.
+the Zero W on SPI NAND with Buildroot, the same as `lunch` options 4, 1 and 0.
+Its `parameter-lyra-spinand.txt` is byte for byte the `parameter.txt` in
+`template/`, which is how we know this is the config that built the firmware
+on your board. An older SDK release may not carry that defconfig, in which
+case `init` lists the ones it has and stops.
 
 Get the SDK tarball from Luckfox's Google Drive:
 <https://drive.google.com/drive/folders/1l2ixhfw53J3eZunyvHMnw2DYViH9d8Cx>
@@ -105,9 +118,16 @@ The targets, which `./sdk.sh build <target>` passes straight through:
 | `firmware` | packs `rockdev/` | Producing a full set |
 | no target | everything | A first build |
 
-`./sdk.sh fetch` copies `rockdev/` into `template/images/`, where
-`template/build.sh` expects it. From there, write a single partition image
-with the web tool's Flash tab, or pack a whole `update.img`.
+`./sdk.sh fetch` copies `uboot.img`, `boot.img` and `rootfs.img` out of
+`rockdev/` into `template/images/`, where `template/build.sh` expects them.
+It leaves the vendor `MiniLoaderAll.bin` and `parameter.txt` alone, because
+`template/README.md` builds from the vendor image and keeps the vendor
+loader. `./sdk.sh fetch all` takes the SDK's versions of those too. That is
+what you want after `build uboot`, which is the one target that produces a new
+`MiniLoaderAll.bin`.
+
+From there, write a single partition image with the web tool's Flash tab, or
+pack a whole `update.img`.
 
 ### Where the config lives
 

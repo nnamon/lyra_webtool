@@ -18,5 +18,6 @@ vendor-supplied.
 
 To change what is inside `rootfs.img` rather than swap the whole file, see
 [../rootfs/README.md](../rootfs/README.md). To build these images from source,
-see [../sdk/README.md](../sdk/README.md); `../sdk/sdk.sh fetch` writes them
-straight into this directory.
+see [../sdk/README.md](../sdk/README.md); `../sdk/sdk.sh fetch` writes
+`uboot.img`, `boot.img` and `rootfs.img` straight into this directory, and
+leaves the vendor `MiniLoaderAll.bin` where it is.

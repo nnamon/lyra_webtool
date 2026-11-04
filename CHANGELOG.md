@@ -2,6 +2,14 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.12.1 · 2026-11-05
+
+- `sdk.sh init` now checks the working tree out of `.repo` before it looks for `build.sh`. The Luckfox Lyra tarball ships a `repo` mirror and no source tree, which is the layout the vendor page documents, and 0.12.0 gave up with "no build.sh in the tarball" before it ever ran `repo sync`.
+- `sdk.sh fetch` copies `uboot.img`, `boot.img` and `rootfs.img` only, and leaves the vendor `MiniLoaderAll.bin` and `parameter.txt` in `template/images/`. It used to copy all of `rockdev/`, overwriting the vendor loader that `template/README.md` tells you to keep. `sdk.sh fetch all` restores the old behaviour deliberately.
+- `sdk.sh init` lists the rk3506 defconfigs an SDK release actually carries when the Zero W one is missing, instead of failing with the SDK's own error.
+- The `Dockerfile` installs the apt list Luckfox publishes for this SDK, rather than one derived from the preflight scripts. `python-is-python3` is the one entry left out, because it conflicts with the `python2` symlink the same page prescribes.
+- The SDK docs now cite Luckfox's Lyra pages, and note that the Pico Pro Max page does not transfer: its menuconfig target is `buildrootconfig`, this SDK wants `buildroot-config`, and its uClibc warning does not apply to the Lyra's glibc toolchain.
+
 ## 0.12.0 · 2026-11-04
 
 - `template/sdk/` builds the Luckfox Lyra SDK in Docker, so adding a package or changing the kernel or device tree needs no Linux machine. `sdk.sh init` extracts the SDK and selects the Zero W SPI NAND config by name; `sdk.sh build <target>`, `fetch`, `get`, `put` and `shell` do the rest.

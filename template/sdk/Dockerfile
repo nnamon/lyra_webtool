@@ -15,21 +15,29 @@ ARG UNAME=builder
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL=C.UTF-8
 
-# The first group is what the SDK's own preflight scripts demand:
-# check-sdk.sh wants python3, rsync, gcc, g++ and findmnt from util-linux;
-# check-buildroot.sh wants make >= 4.0 and unbuffer from expect.
-# The rest is the Buildroot and kernel build set.
+# Three groups, in order of authority.
+#
+# 1. What the SDK's own preflight scripts demand: check-sdk.sh wants python3,
+#    rsync, gcc, g++ and findmnt from util-linux; check-buildroot.sh wants
+#    make >= 4.0 and unbuffer from expect.
+# 2. The list Luckfox publishes for this SDK, at
+#    wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation, taken as given. A
+#    dependency missing here fails a build hours in, so matching the vendor
+#    beats pruning it. python-is-python3 is the one entry left out: it owns
+#    /usr/bin/python as a dpkg file pointing at Python 3, which contradicts
+#    the python2 symlink the same page tells you to make, below.
+# 3. The rest of the Buildroot and kernel build set.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 rsync gcc g++ make util-linux expect expect-dev \
-      bc bison flex bzip2 cpio file gawk git gzip lz4 patch perl \
-      unzip wget xz-utils zstd ca-certificates curl ssh sudo \
-      libssl-dev libncurses-dev libgmp-dev libmpc-dev libc6-dev \
-      gcc-multilib g++-multilib \
-      device-tree-compiler u-boot-tools \
-      fakeroot cmake texinfo chrpath patchelf diffstat \
-      python2 python3-dev python3-pip libsqlite3-dev \
-      bsdextrautils locales \
+      git ssh libssl-dev liblz4-tool patchelf chrpath gawk texinfo diffstat \
+      binfmt-support qemu-user-static live-build bison flex fakeroot cmake \
+      gcc-multilib g++-multilib unzip device-tree-compiler ncurses-dev \
+      libgucharmap-2-90-dev bzip2 expat gpgv2 cpp-aarch64-linux-gnu \
+      libgmp-dev libmpc-dev bc python2 curl file bsdmainutils scons \
+      cpio gzip lz4 patch perl wget xz-utils zstd ca-certificates sudo \
+      libncurses-dev libc6-dev u-boot-tools \
+      python3-dev python3-pip libsqlite3-dev bsdextrautils locales \
  && rm -rf /var/lib/apt/lists/*
 
 # Some Buildroot packages still call `python` and mean Python 2. This is what

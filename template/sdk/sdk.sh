@@ -41,23 +41,26 @@ in_sdk() {
 
 cmd_init() {
   local tgz=${1:-}
-  [ -n "$tgz" ] || die "usage: ./sdk.sh init <Luckfox_Lyra_SDK_<date>.tar.gz>"
+  [ -n "$tgz" ] || die "usage: ./sdk.sh init <luckfox-lyra-<date>.tar.gz>"
   [ -f "$tgz" ] || die "no such file: $tgz"
   tgz=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$tgz")
   build_tools
   docker volume create "$VOLUME" >/dev/null
 
+  # The Lyra tarball ships only the .repo mirror, so the checkout has to run
+  # before anything looks for build.sh. That is the order the vendor wiki
+  # gives: tar, then `.repo/repo/repo sync -l`.
   in_sdk '
     sudo chown "$(id -u):$(id -g)" /sdk
-    if [ -f /sdk/build.sh ]; then
-      echo "SDK already extracted, skipping"
+    if [ -f /sdk/build.sh ] || [ -d /sdk/.repo ]; then
+      echo "SDK already in the volume, skipping extraction"
     else
       echo "Extracting $(basename /in/sdk.tar.gz), this takes a while"
       tar -C /sdk --warning=no-unknown-keyword -xf /in/sdk.tar.gz
       # Some releases wrap everything in one top-level directory.
-      if [ ! -f /sdk/build.sh ]; then
-        inner=$(find /sdk -maxdepth 2 -name build.sh -type f | head -1)
-        [ -n "$inner" ] || { echo "no build.sh in the tarball" >&2; exit 1; }
+      if [ ! -f /sdk/build.sh ] && [ ! -d /sdk/.repo ]; then
+        inner=$(find /sdk -maxdepth 2 \( -name build.sh -o -name .repo \) | head -1)
+        [ -n "$inner" ] || { echo "no build.sh and no .repo in the tarball" >&2; exit 1; }
         d=$(dirname "$inner")
         if [ "$d" != /sdk ]; then
           echo "Moving $d up to /sdk"
@@ -66,16 +69,29 @@ cmd_init() {
       fi
     fi
 
-    # A repo-managed tarball ships only the .repo mirror, so the working tree
-    # has to be checked out from it before anything can build.
-    if [ -d /sdk/.repo ] && [ ! -d /sdk/buildroot ]; then
+    if [ -d /sdk/.repo ] && [ ! -f /sdk/build.sh ]; then
       echo "Checking out the working tree from .repo"
       ./.repo/repo/repo sync -l
     fi
+    [ -f /sdk/build.sh ] || { echo "still no build.sh after checkout" >&2; exit 1; }
 
     echo
     echo "Selecting $DEFCONFIG"
-    ./build.sh "$DEFCONFIG"
+    if ! ./build.sh "$DEFCONFIG"; then
+      defs=$(find device/rockchip -name "*_defconfig" -path "*3506*" \
+        -printf "  %f\n" 2>/dev/null | sort || true)
+      echo >&2
+      if [ -n "$defs" ]; then
+        echo "This SDK has no $DEFCONFIG. The rk3506 defconfigs it has:" >&2
+        echo "$defs" >&2
+      else
+        echo "This SDK has no $DEFCONFIG, and no rk3506 defconfig at all." >&2
+      fi
+      echo >&2
+      echo "Set DEFCONFIG at the top of sdk.sh to one of those, or run" >&2
+      echo "./sdk.sh shell and then ./build.sh lunch to pick interactively." >&2
+      exit 1
+    fi
   ' -v "$tgz:/in/sdk.tar.gz:ro"
 
   echo
@@ -97,15 +113,50 @@ cmd_build() {
 }
 
 cmd_fetch() {
+  # Default to the three partition images the template replaces. rockdev/ also
+  # holds MiniLoaderAll.bin and parameter.txt, and template/README.md builds
+  # from the vendor image and keeps the vendor loader, so copying all of
+  # rockdev/ over images/ would quietly discard it. `fetch all` opts in.
+  local take_all=0
+  if [ "${1:-}" = all ]; then take_all=1; shift; fi
   local dest=${1:-../images}
   mkdir -p "$dest"
   dest=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dest")
   build_tools
   in_sdk '
     [ -d /sdk/rockdev ] || { echo "nothing built yet: no rockdev/" >&2; exit 1; }
-    cp -Lv /sdk/rockdev/* /out/ 2>/dev/null || true
-    ls -l /out/
-  ' -v "$dest:/out"
+    if [ "$TAKE_ALL" = 1 ]; then
+      echo "Taking all of rockdev/, including the SDK loader and parameter.txt."
+      cp -Lv /sdk/rockdev/* /out/
+      exit 0
+    fi
+    copied=0
+    for f in uboot.img boot.img rootfs.img; do
+      if [ -f "/sdk/rockdev/$f" ]; then
+        cp -Lv "/sdk/rockdev/$f" /out/
+        copied=$((copied + 1))
+      else
+        echo "not built: $f"
+      fi
+    done
+    if [ "$copied" = 0 ]; then
+      echo "rockdev/ holds none of the three partition images" >&2
+      exit 1
+    fi
+    left=""
+    for f in /sdk/rockdev/*; do
+      b=$(basename "$f")
+      case "$b" in
+        uboot.img|boot.img|rootfs.img) ;;
+        *) left="$left $b" ;;
+      esac
+    done
+    if [ -n "$left" ]; then
+      echo "left behind:$left"
+      echo "The vendor MiniLoaderAll.bin and parameter.txt stay as they are."
+      echo "Run ./sdk.sh fetch all to take the SDK versions instead."
+    fi
+  ' -v "$dest:/out" -e "TAKE_ALL=$take_all"
   echo "copied into $dest"
 }
 
@@ -166,8 +217,9 @@ usage() {
   cat <<USAGE
 Usage: ./sdk.sh <command> [args]
 
-  init <sdk.tar.gz>   extract the SDK into the work volume and select the
-                      Zero W SPI NAND Buildroot config
+  init <sdk.tar.gz>   extract the SDK into the work volume, check out the
+                      working tree from .repo, and select the Zero W SPI NAND
+                      Buildroot config
   build [target]      run ./build.sh in the SDK. With no target, build
                       everything. Useful targets:
                         rootfs            rebuild rootfs.img
@@ -176,7 +228,10 @@ Usage: ./sdk.sh <command> [args]
                         firmware          pack rockdev/
                         buildroot-config  add or remove packages
                         kernel-config     change kernel options
-  fetch [dir]         copy rockdev/ out to dir (default ../images)
+  fetch [dir]         copy uboot.img, boot.img and rootfs.img out to dir
+                      (default ../images), keeping the vendor loader and
+                      parameter.txt that are already there
+  fetch all [dir]     copy everything in rockdev/, SDK loader included
   get <path> [dir]    copy one path out of the SDK tree
   put <file> <path>   copy one file into the SDK tree
   shell               interactive shell in the SDK tree

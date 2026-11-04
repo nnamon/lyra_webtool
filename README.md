@@ -143,10 +143,16 @@ Luckfox SDK. `template/sdk/` runs that in Docker too:
 
 ```sh
 cd template/sdk
-./sdk.sh init ~/Downloads/Luckfox_Lyra_SDK_250815.tar.gz
+./sdk.sh init ~/Downloads/luckfox-lyra-241213.tar.gz
 ./sdk.sh build rootfs
 ./sdk.sh fetch
 ```
+
+That follows Luckfox's own
+[SDK compilation](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation)
+and [Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration)
+pages for the Lyra, in a container. `fetch` replaces `uboot.img`, `boot.img`
+and `rootfs.img` and keeps the vendor loader.
 
 Both setups keep their work in a Docker volume rather than a directory. For
 the SDK that is forced: it checks the filesystem type of its own source tree
