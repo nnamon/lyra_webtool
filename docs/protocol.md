@@ -222,7 +222,7 @@ the header is read with a fixed `fread` length of `0x66`.
 The last 32 bytes of the file are a lowercase-hex MD5 covering
 `firmware offset + firmware size` bytes from the start.
 
-### A caveat on the inner `RKAF` table
+### The inner `RKAF` table
 
 `upgrade_tool` v2.17 contains **no `RKAF` tag comparison at all**. Searching the
 disassembly for `0x46414b52` finds nothing. The item table is reached through

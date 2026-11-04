@@ -100,12 +100,13 @@
       <h2>MaskROM bootstrap</h2>
       <p class="note">
         MaskROM accepts only two control transfers, <code>0x471</code> for DDR init and
-        <code>0x472</code> for the USB loader. Load a packed loader such as
-        <code>rk3506_spl_loader_*.bin</code> to reach Loader mode. This writes nothing to flash.
+        <code>0x472</code> for the USB loader. Load a packed loader to reach Loader mode.
+        Luckfox ships this as <code>MiniLoaderAll.bin</code> beside <code>update.img</code>.
+        This writes nothing to flash, and you can skip it if the image below carries its own loader.
       </p>
       <label class="dropzone" for="file-loader">
         <input type="file" id="file-loader" accept=".bin">
-        <span>Choose a loader <code>.bin</code></span>
+        <span>Choose <code>MiniLoaderAll.bin</code> or another packed loader</span>
       </label>
       <div id="loader-summary" class="summary" hidden></div>
       <div class="actions">

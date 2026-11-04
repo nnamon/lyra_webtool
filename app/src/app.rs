@@ -1116,14 +1116,15 @@ async fn load_image_tables(ctx: Ctx, f: web_sys::File, size: u64, header: Update
     let fw_start = header.fw_offset as u64;
     let prefix_len = (header.fw_size as u64).min(64 * 1024);
     let items = match read_file_range(&f, fw_start as u32, (fw_start + prefix_len) as u32).await {
-        Ok(prefix) => match rockusb::image::RkafFirmware::parse(&prefix) {
+        Ok(prefix) => match rockusb::image::RkafFirmware::parse_table(&prefix) {
             Ok(fw) => {
                 summary.push_str(&format!(
-                    "model {}  ·  id {}  ·  by {}\n{} item(s)\n",
-                    fw.model,
-                    fw.id,
-                    fw.manufacturer,
-                    fw.items.len()
+                    "model {}  ·  id {}  ·  firmware {}\n{} items, {} written to flash\n",
+                    fw.model.trim(),
+                    fw.id.trim(),
+                    fw.version_string(),
+                    fw.items.len(),
+                    fw.writable_items().count(),
                 ));
                 Some(fw)
             }
@@ -1171,14 +1172,13 @@ fn render_item_table(fw: &rockusb::image::RkafFirmware) {
     let mut rows = String::new();
     for (i, item) in fw.items.iter().enumerate() {
         let writable = item.is_writable();
-        let target = if writable {
-            format!(
+        let target = match item.kind().unsupported_reason() {
+            None => format!(
                 "sector {} ({:#x})",
                 item.target_sector,
                 item.target_byte_offset()
-            )
-        } else {
-            "Not written".to_string()
+            ),
+            Some(reason) => reason.to_string(),
         };
         rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td>\
@@ -1196,6 +1196,30 @@ fn render_item_table(fw: &rockusb::image::RkafFirmware) {
         tbody.set_inner_html(&rows);
     }
     set_hidden("item-table", false);
+
+    // Say plainly what is being left out, and what that assumes about the board.
+    let skipped: Vec<&str> = fw
+        .items
+        .iter()
+        .filter(|i| !i.is_writable())
+        .map(|i| i.name.as_str())
+        .collect();
+    if !skipped.is_empty() {
+        log_warn(&format!(
+            "not writing {}: the board keeps its existing partition table and bootloader",
+            skipped.join(", ")
+        ));
+    }
+    for item in &fw.items {
+        if item.overflows_partition() {
+            log_err(&format!(
+                "{} is {} but its partition holds only {}",
+                item.name,
+                human_bytes(item.data_size as u64),
+                human_bytes(item.partition_sectors as u64 * SECTOR_SIZE as u64)
+            ));
+        }
+    }
 }
 
 /// Which item indices the user has ticked.

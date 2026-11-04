@@ -134,8 +134,13 @@ Checked against real artifacts:
   key and `RKBOOT` layout all come from the vendor binary, with addresses
   recorded.
 - The `RKBOOT` parser reads a genuine
-  `rk356x_spl_loader_ddr1056_v1.10.111.bin`, including its stored CRC32.
-- 40 unit tests cover the published CRC-16/CCITT (`0x29B1`), CRC-32
+  `rk356x_spl_loader_ddr1056_v1.10.111.bin` and Luckfox's RK3506
+  `MiniLoaderAll.bin`, including both stored CRC32s.
+- The `RKAF` layout is decoded from a real Luckfox Lyra Zero W `update.img`.
+  Its header is committed as a test fixture, and the parsed targets match that
+  image's `parameter.txt`: `uboot` at `0x2000`, `boot` at `0x4000`, `rootfs`
+  at `0x10000`.
+- 48 tests, covering the published CRC-16/CCITT (`0x29B1`), CRC-32
   (`0xCBF43926`) and RC4 check vectors.
 - The UI runs in headless Chromium on every change.
 
@@ -143,12 +148,16 @@ Not checked:
 
 - No physical Lyra Zero W has been flashed. Every USB transfer path is
   untested against real silicon.
-- The inner `RKAF` item layout follows public `rkdeveloptool` headers, not this
-  binary, which carries no `RKAF` tag check. `RkafFirmware::parse` validates
-  bounds hard, so a layout mismatch errors out instead of writing to a wrong
-  address.
-- IDBlock generation (`upgrade_tool ul`) is not implemented. Use the bootstrap
-  and `update.img` path.
+- The `parameter` and `bootloader` items are skipped. `parameter` targets
+  LBA 0, but on a `TYPE: GPT` device the host must build a GPT rather than copy
+  `parameter.txt` there, and `bootloader` needs IDBlock generation. Neither
+  transform is implemented, so a flash writes `uboot`, `boot` and `rootfs` and
+  leaves the board's existing partition table and bootloader in place. That
+  works on a board that currently boots. It will not revive one whose flash you
+  have fully erased.
+- The `RKAF` layout is confirmed against one firmware build. Another build
+  could lay it out differently, so the parser still bounds-checks every item
+  and refuses the image rather than writing to a wrong address.
 
 ## Licence
 
