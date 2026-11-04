@@ -103,6 +103,22 @@ fn log_err(msg: &str) {
 
 // ───────────────────────────── status / enablement ─────────────────
 
+/// Controls that need a running loader, not just an attached device.
+///
+/// In MaskROM the chip answers only the 471/472 control transfers, so these
+/// would fail at the first command. Gating them here turns a confusing
+/// mid-operation error into a disabled button.
+const LOADER_ONLY_BUTTONS: &[&str] = &[
+    "btn-read-lba",
+    "btn-write-lba",
+    "btn-erase-lba",
+    "btn-erase-system",
+    "btn-erase-block",
+    "btn-test-badblock",
+    "btn-read-storage",
+    "btn-switch-storage",
+];
+
 /// Controls that only make sense with a device attached.
 const DEVICE_BUTTONS: &[&str] = &[
     "btn-read-info",
@@ -135,18 +151,32 @@ fn set_status(dot: &str, text: &str) {
 fn refresh(ctx: &Ctx) {
     let connected = ctx.is_connected();
     let busy = ctx.busy.get();
+    let in_loader = ctx
+        .dev
+        .borrow()
+        .as_ref()
+        .map(|d| d.mode() == DeviceMode::Loader)
+        .unwrap_or(false);
     for id in DEVICE_BUTTONS {
         set_disabled(id, !connected || busy);
     }
     set_hidden("btn-disconnect", !connected);
     set_disabled("btn-connect", connected || busy);
 
+    for id in LOADER_ONLY_BUTTONS {
+        set_disabled(id, !connected || busy || !in_loader);
+    }
+
     let st = ctx.state.borrow();
     set_disabled(
         "btn-download-boot",
         !connected || busy || st.loader.is_none(),
     );
-    set_disabled("btn-flash", !connected || busy || st.firmware.is_none());
+    // Flashing writes by LBA, so it needs the loader running as well.
+    set_disabled(
+        "btn-flash",
+        !connected || busy || !in_loader || st.firmware.is_none(),
+    );
     set_disabled("btn-save-lba", st.last_read.is_none());
     set_disabled("sel-storage", !connected || busy || st.media.is_empty());
     set_disabled(
@@ -323,6 +353,13 @@ fn wire_connection(ctx: &Ctx) {
             set_text("dev-serial", &serial);
 
             *ctx.dev.borrow_mut() = Some(Device::new(transport, mode));
+            if mode == DeviceMode::Maskrom {
+                log_warn(
+                    "MaskROM answers only the 471/472 bootstrap. \
+                     Load a loader or an update.img, press Download boot, \
+                     then reconnect before reading or writing flash.",
+                );
+            }
             let _ = c2;
             Ok(format!(
                 "connected: {vid:04x}:{pid:04x} in {} mode (bcdUSB {usb_ver:#06x})",
@@ -1007,14 +1044,19 @@ fn wire_flash(ctx: &Ctx) {
                 sleep_ms(wait).await;
             }
 
-            // The loader is running now, so full commands are available.
-            if let Some(dev) = ctx.dev.borrow_mut().as_mut() {
-                dev.set_mode(DeviceMode::Loader);
+            // The board re-enumerates with a new address and product ID, so
+            // this handle is dead. Drop it rather than marking it Loader: a
+            // stale handle would re-enable the write controls against a device
+            // that is no longer on the bus.
+            if let Some(dev) = ctx.dev.borrow_mut().take() {
+                let _ = dev.into_transport().close().await;
             }
-            set_text("dev-mode", DeviceMode::Loader.as_str());
+            for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
+                set_text(id, "Reconnect");
+            }
             log_warn(
-                "boot downloaded. The device re-enumerates as a Loader: \
-                 reconnect to talk to it.",
+                "boot downloaded. The board re-enumerates as a Loader: \
+                 press Connect again, then check Mode reads Loader.",
             );
             Ok(format!("{} boot stage(s) sent", stages.len()))
         });
