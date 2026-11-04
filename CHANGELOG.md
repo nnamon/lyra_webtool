@@ -2,6 +2,11 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.6.0 · 2026-11-04
+
+- Device tab can treat the board as Loader or MaskROM when the detected mode is wrong. Mode comes from the USB descriptor, and a board in Loader that reads as MaskROM would otherwise leave the write controls disabled.
+- Connecting logs the detected mode and the `bcdUSB` value it came from.
+
 ## 0.5.0 · 2026-11-04
 
 - Settings holds Version history, the running version and build, Reload app, and Clear cached copy and reload.

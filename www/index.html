@@ -54,6 +54,19 @@
         <li>Hold <kbd>BOOT</kbd> while plugging in USB to enter MaskROM, or power up normally for Loader.</li>
         <li>Press <b>Connect</b> and pick the device with vendor <code>0x2207</code>.</li>
       </ol>
+      <div class="param-list">
+        <label class="param"><span>Treat device as</span>
+          <select id="sel-mode">
+            <option value="auto" selected>Detected</option>
+            <option value="loader">Loader</option>
+            <option value="maskrom">MaskROM</option>
+          </select>
+        </label>
+      </div>
+      <p class="note">
+        Mode is detected from the USB descriptor. If the board is in Loader but reads as
+        MaskROM, the write controls stay disabled; override it here.
+      </p>
       <dl class="rows">
         <div><dt>Mode</dt><dd id="dev-mode">Not connected</dd></div>
         <div><dt>VID:PID</dt><dd id="dev-vidpid">Not connected</dd></div>

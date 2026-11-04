@@ -346,8 +346,20 @@ fn wire_connection(ctx: &Ctx) {
             let serial = transport
                 .serial_number()
                 .unwrap_or_else(|| "Not reported".into());
-            let mode = DeviceMode::from_bcd_usb(usb_ver);
+            let detected = DeviceMode::from_bcd_usb(usb_ver);
+            let mode = match value("sel-mode").as_str() {
+                "loader" => DeviceMode::Loader,
+                "maskrom" => DeviceMode::Maskrom,
+                _ => detected,
+            };
             log(&format!("USB layout: {}", transport.describe()));
+            if mode != detected {
+                log_warn(&format!(
+                    "detected {} from bcdUSB {usb_ver:#06x}, overridden to {}",
+                    detected.as_str(),
+                    mode.as_str()
+                ));
+            }
 
             set_text("dev-mode", mode.as_str());
             set_text("dev-vidpid", &format!("{vid:04x}:{pid:04x}"));
@@ -368,6 +380,28 @@ fn wire_connection(ctx: &Ctx) {
                 mode.as_str()
             ))
         });
+    });
+
+    // Let the user correct a wrong detection without reconnecting.
+    let c = ctx.clone();
+    on_change("sel-mode", move || {
+        let choice = value("sel-mode");
+        {
+            let mut guard = c.dev.borrow_mut();
+            if let Some(dev) = guard.as_mut() {
+                let mode = match choice.as_str() {
+                    "loader" => Some(DeviceMode::Loader),
+                    "maskrom" => Some(DeviceMode::Maskrom),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    dev.set_mode(mode);
+                    set_text("dev-mode", mode.as_str());
+                    log_warn(&format!("treating device as {}", mode.as_str()));
+                }
+            }
+        }
+        refresh(&c);
     });
 
     let c = ctx.clone();
