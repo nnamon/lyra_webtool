@@ -8,9 +8,9 @@ Live at [nnamon.github.io/lyra_webtool](https://nnamon.github.io/lyra_webtool/).
 Changes are in [CHANGELOG.md](CHANGELOG.md), which Settings shows as Version
 history.
 
-This has never been run against a physical board. Read
-[Verification status](#verification-status) before you flash anything you
-cannot recover.
+Verified on a Luckfox Lyra Zero W: it flashed the Buildroot SPI NAND image and
+the board booted. Read [Verification status](#verification-status) for what
+that does and does not cover.
 
 ## Transport
 
@@ -73,6 +73,35 @@ macOS needs no setup.
 Before any write, confirm the transport works on your board. Run **Read device
 info**, then a one-sector read on the Memory tab.
 
+## After flashing
+
+Power-cycle the board so it leaves Loader mode and boots what you wrote.
+
+The Buildroot image brings up a USB RNDIS gadget on `usb0` at
+`192.168.123.100/24`, with no DHCP server, so give your host an address on the
+same subnet:
+
+```sh
+# Windows, admin shell
+netsh interface ipv4 set address name="Ethernet 2" static 192.168.123.1 255.255.255.0
+ssh root@192.168.123.100          # password: luckfox
+```
+
+If the address differs on your build, find the board by IPv6 link-local
+instead, which needs no configuration:
+
+```sh
+ping -6 ff02::1%<interface-index>
+netsh interface ipv6 show neighbors "Ethernet 2"
+```
+
+The entry that is `Reachable` with a resolved, locally administered MAC is the
+board's gadget interface.
+
+The debug UART is UART0 at 1500000 baud, which the Console tab opens over Web
+Serial. It needs a 3.3 V USB-to-TTL adapter that can run at 1.5 Mbaud; many
+CP210x and PL2303 cables cannot.
+
 ## Building
 
 ```sh
@@ -131,6 +160,15 @@ silently rather than erroring:
 
 ## Verification status
 
+Checked on hardware:
+
+- A Luckfox Lyra Zero W was flashed with `Luckfox_Lyra_Zero_W_Flash_261020`
+  over WebUSB, in Loader mode, writing `uboot`, `boot` and `rootfs`. The board
+  booted, brought up its USB gadget and gave a shell.
+- That covers connect, mode probe, `update.img` parsing, streaming MD5 verify
+  and `WriteLBA`. It does not cover the MaskROM bootstrap, erase, DRAM or
+  eFuse, none of which that run touched.
+
 Checked against real artifacts:
 
 - The CBW layout, opcode table, bootstrap framing, CRC-16, Rockchip CRC32, RC4
@@ -149,8 +187,10 @@ Checked against real artifacts:
 
 Not checked:
 
-- No physical Lyra Zero W has been flashed. Every USB transfer path is
-  untested against real silicon.
+- The MaskROM 471/472 bootstrap. The one board tested was in Loader mode, so
+  that path has never completed against hardware.
+- Erase, DRAM write and execute, and eFuse. These sit behind the Settings
+  switch and no hardware run has exercised them.
 - The `parameter` and `bootloader` items are skipped. `parameter` targets
   LBA 0, but on a `TYPE: GPT` device the host must build a GPT rather than copy
   `parameter.txt` there, and `bootloader` needs IDBlock generation. Neither
