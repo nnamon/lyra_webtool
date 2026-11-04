@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.14.1 · 2026-11-05
+
+- Corrected the flashing instructions. A normal power-up gives you Linux and an RNDIS gadget, not a rockusb device, so the old "for Loader mode, power up normally" was wrong and left you with nothing to connect to.
+- Documented how to actually reach Loader mode: write `0x5242c301` to `0xff910200` and reboot. The device tree names the register, as `reboot-mode` at `offset = <0x200>` under `syscon@ff910000`, which is `rockchip,rk3506-grf-pmu`.
+- Noted that `reboot loader` does not work on this image. Its `reboot` is BusyBox, which takes no mode argument, so the reboot notifier never sees one.
+
 ## 0.14.0 · 2026-11-05
 
 - `template/boot/` takes `boot.img` apart, edits the device tree and puts it back. Enabling a peripheral on this board needs no kernel rebuild: `CONFIG_SPI_ROCKCHIP`, `CONFIG_SPI_SPIDEV`, `CONFIG_GPIO_SYSFS` and `CONFIG_GPIO_CDEV` are all built in already, and the only thing stopping SPI is `status = "disabled"` in the device tree.

@@ -61,17 +61,39 @@ macOS needs no setup.
 
 ## Flashing a board
 
-1. Enter MaskROM: hold `BOOT` while plugging in USB. For Loader mode, power up
-   normally.
-2. Press **Connect** and pick the device with vendor `0x2207`.
-3. From MaskROM, open the Flash tab, choose a packed loader
-   (`rk3506_spl_loader_*.bin`) and press **Download boot**. This writes nothing
-   to flash. The board re-enumerates as a Loader, so reconnect before step 4.
-4. Choose an `update.img`. Check the item table lists the targets you expect.
-5. Press **Flash selected items**.
+A normal power-up does not give you a flashable device. The board boots Linux
+and brings up an RNDIS network gadget, not rockusb. You have to ask for one of
+the two download modes.
 
-Before any write, confirm the transport works on your board. Run **Read device
-info**, then a one-sector read on the Memory tab.
+**Loader mode, from the running board.** U-Boot reads a magic value out of the
+PMU scratch register on each boot. The device tree names it:
+`syscon@ff910000` is `rockchip,rk3506-grf-pmu`, the `reboot-mode` child sits
+at `offset = <0x200>`, and `mode-loader = <0x5242c301>`. So:
+
+```sh
+ssh root@192.168.123.100          # password: luckfox
+devmem 0xff910200 32 0x5242c301
+reboot
+```
+
+`reboot loader` does not work on the Buildroot image. Its `reboot` is BusyBox,
+which takes no mode argument, so the reboot notifier never sees one and the
+board comes back up normally. Writing the register is the way.
+
+**MaskROM mode.** Hold `BOOT` while plugging in USB. From there the Flash tab
+can push a packed loader (the vendor `MiniLoaderAll.bin`, or
+`rk3506_spl_loader_*.bin`) with **Download boot**, which writes nothing to
+flash. The board re-enumerates as a Loader, so reconnect afterwards. This path
+has never been run against hardware.
+
+Then:
+
+1. Press **Connect** and pick the device with vendor `0x2207`.
+2. Confirm the transport before writing: **Read device info**, then a
+   one-sector read on the Memory tab.
+3. Choose an `update.img`. Check the item table lists the targets you expect,
+   at the LBAs in `parameter.txt`.
+4. Press **Flash selected items**.
 
 ## After flashing
 
