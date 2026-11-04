@@ -102,6 +102,22 @@ The debug UART is UART0 at 1500000 baud, which the Console tab opens over Web
 Serial. It needs a 3.3 V USB-to-TTL adapter that can run at 1.5 Mbaud; many
 CP210x and PL2303 cables cannot.
 
+## Building your own images
+
+`template/` packs an `update.img` from loose files, and `rkimage` unpacks and
+packs containers:
+
+```sh
+cargo run -p rockusb --bin rkimage -- info      update.img
+cargo run -p rockusb --bin rkimage -- unpack    update.img work/
+cargo run -p rockusb --bin rkimage -- pack      work/ new-update.img
+cargo run -p rockusb --bin rkimage -- roundtrip update.img
+```
+
+`roundtrip` repacks what it unpacked and compares the bytes, so you can check
+the packer reproduces a vendor image exactly before relying on it. See
+[template/README.md](template/README.md).
+
 ## Building
 
 ```sh
@@ -124,12 +140,15 @@ crates/rockusb/     protocol crate, no USB dependency
   transport.rs        the Transport trait, plus an in-memory fake for tests
   crc.rs  rc4.rs      checksums and the IDBlock cipher
   loader.rs           RKBOOT loader containers
-  image.rs            RKFW and RKAF update.img containers
+  image.rs            RKFW and RKAF update.img containers, parsing
+  pack.rs             the same containers, building
+  bin/rkimage.rs      unpack, pack and round-trip CLI
 app/                wasm crate
   webusb.rs           Transport over WebUSB
   serial.rs           UART console over Web Serial
   app.rs  dom.rs      state, event wiring, DOM helpers
 www/                static site, the Pages artifact
+template/           pack an update.img from loose files
 docs/protocol.md    reverse-engineering notes
 ```
 

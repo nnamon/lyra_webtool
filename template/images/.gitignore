@@ -1,0 +1,4 @@
+*.img
+*.bin
+package-file
+parameter.txt

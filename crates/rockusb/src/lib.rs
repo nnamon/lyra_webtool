@@ -25,6 +25,7 @@ pub mod crc;
 pub mod device;
 pub mod image;
 pub mod loader;
+pub mod pack;
 pub mod protocol;
 pub mod rc4;
 pub mod transport;

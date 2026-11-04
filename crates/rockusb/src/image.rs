@@ -36,19 +36,25 @@ pub const RKFW_HEADER_LEN: usize = 0x66;
 pub const MD5_TAIL_LEN: usize = 32;
 
 /// Offset of the inner `RKAF` item array.
-const RKAF_ITEMS_OFFSET: usize = 0x8c;
+pub(crate) const RKAF_ITEMS_OFFSET: usize = 0x8c;
 /// Stride of one `RKAF` item record.
-const RKAF_ITEM_LEN: usize = 0x70;
+pub(crate) const RKAF_ITEM_LEN: usize = 0x70;
 /// Offset of the item count.
-const RKAF_COUNT_OFFSET: usize = 0x88;
+pub(crate) const RKAF_COUNT_OFFSET: usize = 0x88;
 /// Offset of the packed firmware version, e.g. `0x08010000` for 8.1.
-const RKAF_VERSION_OFFSET: usize = 0x84;
+pub(crate) const RKAF_VERSION_OFFSET: usize = 0x84;
 /// Sentinel in an item's flash address meaning "no fixed LBA".
 pub const NO_FLASH_ADDRESS: u32 = 0xffff_ffff;
 /// Sentinel in an item's partition size meaning "grow to fill the device".
 pub const PARTITION_GROWS: u32 = 0xffff_ffff;
 /// Item count above which the container is treated as malformed.
-const RKAF_MAX_ITEMS: usize = 64;
+pub(crate) const RKAF_MAX_ITEMS: usize = 64;
+/// Every payload starts on a 2048-byte boundary, and so does the first one.
+///
+/// Read off a real Luckfox `update.img`: the header and table occupy 812
+/// bytes, the first payload sits at 2048, and each later payload starts at the
+/// previous one's end rounded up to 2048.
+pub const RKAF_PAYLOAD_ALIGN: usize = 2048;
 
 /// Errors from parsing a firmware container.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.10.0 · 2026-11-04
+
+- `rkimage`, a command-line tool, unpacks and packs `update.img` files. It runs on your machine and is not part of the web page.
+- `rkimage roundtrip` repacks what it unpacked and compares the bytes, so you can confirm the packer reproduces a vendor image before relying on it.
+- `template/` packs an `update.img` from loose files, set up for the Lyra Zero W, so you can replace a partition image and flash the result.
+
 ## 0.9.1 · 2026-11-04
 
 - Reads a reply a whole packet at a time and trims it, rather than asking for exactly the expected length. A device that answers with more would otherwise leave bytes behind and corrupt the next command.
