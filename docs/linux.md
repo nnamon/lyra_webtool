@@ -170,9 +170,13 @@ exit
 ## Changing what the board exposes: boot.img
 
 Every driver is built into the vendor kernel, so turning on SPI, I2C, PWM or a
-UART needs no kernel rebuild. It needs one `status` change in the device tree
-inside `boot.img`. `template/boot/` does that in Docker, and verifies the
-container roundtrips before it writes anything.
+UART needs no kernel rebuild in principle. It needs one `status` change in the
+device tree inside `boot.img`.
+
+**This does not work yet.** A container repacked by `template/boot/` was
+flashed to a board and did not boot. Before reaching for it, check whether you
+need it at all: pins that no enabled node claims are already usable as GPIO,
+and a userspace driver on those pins cannot break booting.
 
 ```sh
 cd template/boot

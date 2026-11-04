@@ -8,4 +8,4 @@
 #
 # The demo tries the other revision by itself if the panel does not answer,
 # so this is only needed to skip that first attempt.
-ARGS=""
+ARGS="--bitbang"

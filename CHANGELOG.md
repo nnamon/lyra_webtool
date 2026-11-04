@@ -2,6 +2,13 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.14.2 · 2026-11-05
+
+- A `boot.img` repacked by `template/boot/` does not boot. Flashed to a Luckfox Lyra Zero W, the board hung and needed the vendor image reflashed to recover. The tooling and its documentation now say so at the top rather than describing a route that fails.
+- The claim that FIT signature verification was inactive was an inference from the absence of a `value` property, presented as a finding. The vendor U-Boot contains `## Verified-boot`, `FIT: %ssigned, %sconf required` and `>sha256,rsa2048`, so it has signature support compiled in, and the repack drops the `signature` node. Recorded as the leading suspect, not a conclusion.
+- The e-Paper demo now defaults to `--bitbang`. All seven pins a seated HAT drives are plain GPIOs in the stock device tree, so the demo needs no `boot.img` change and cannot stop the board booting. A 5808-byte frame against a three-second refresh makes the speed cost invisible.
+- `docs/linux.md` and the template READMEs no longer present the device tree route as working.
+
 ## 0.14.1 · 2026-11-05
 
 - Corrected the flashing instructions. A normal power-up gives you Linux and an RNDIS gadget, not a rockusb device, so the old "for Loader mode, power up normally" was wrong and left you with nothing to connect to.

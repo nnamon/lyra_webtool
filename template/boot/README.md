@@ -22,14 +22,36 @@ calls itself `rockchip,rk3506g-demo-display-control` and enables a DSI panel
 and three touch controllers. Of 60 nodes, 25 are disabled, including both SPI
 controllers, five of six UARTs, all ten PWMs, both CAN and both Ethernet.
 
-## Is the FIT signed
+## This does not work yet
 
-It declares a signature and does not carry one. The `configurations/conf`
-node has `algo`, `padding`, `key-name-hint` and `sign-images`, but no `value`
-property, while each image carries a real sha256 hash. A vendor image with no
-signature boots on the board, so signature enforcement is not active, and a
-repacked container with regenerated hashes boots too. `mkimage` recomputes
-those hashes on every pack.
+**A `boot.img` repacked by this tool does not boot.** Tried on a Luckfox Lyra
+Zero W: the board hung and had to be recovered by reflashing the vendor
+image. Do not flash anything built here without a way back.
+
+What is wrong is not yet known. The leading suspect is FIT signature
+verification. The vendor container declares a signature and appears not to
+carry one: `configurations/conf` has `algo`, `padding`, `key-name-hint` and
+`sign-images`, but no `value` property, and the whole FIT tree is 1536 bytes,
+too small to hold a 2048-bit RSA value. From that this tool concluded that
+enforcement was off. That conclusion was wrong, or at least incomplete: the
+vendor U-Boot contains `## Verified-boot: %d`,
+`FIT: %ssigned, %sconf required` and `>sha256,rsa2048`, so it has signature
+support compiled in, and the repack drops the `signature` node entirely.
+
+Other candidates not yet ruled out: the `rollback-index` property, the
+external data layout, and the device tree edit itself.
+
+To find out which, flash a container repacked with no device tree change at
+all. If that boots, the container is fine and the edit is at fault. If it
+does not, the repack is at fault and the fix is to patch the device tree in
+place at its original size, leaving every other byte of the container alone,
+rather than rebuilding it with `mkimage`.
+
+## For an SPI peripheral, you probably do not need this
+
+Every pin a Raspberry Pi HAT drives is a plain GPIO in the stock device tree.
+Driving SPI from userspace needs no `boot.img` change and so cannot stop the
+board booting. See `../rootfs/epaper/` and its `--bitbang` mode.
 
 ## Commands
 
@@ -108,7 +130,7 @@ Keep the original.
 - The kernel image inside the repacked container is byte-identical to the
   vendor's.
 
-Not verified: that the board boots this image, or that the RM_IO routing
-brings up `/dev/spidev1.0`. Neither has been tried on hardware. The mux
-offset is measured rather than documented, so if SPI does not appear, the
-demo has a `--bitbang` mode that needs no device tree change at all.
+Tried on hardware and **failed**: a board flashed with a container repacked
+here did not boot, and was recovered with the vendor image. Everything above
+describes a container that parses correctly and still does not boot, which is
+the gap between checking an artefact and running it.

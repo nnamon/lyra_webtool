@@ -195,7 +195,8 @@ and refuses anything that is not ext4.
 
 Every driver is built into the vendor kernel, so enabling SPI, I2C, PWM or a
 UART is a device tree change inside `boot.img`, not a kernel rebuild.
-`template/boot/` does that in Docker:
+`template/boot/` does that in Docker, but **the image it produces does not
+boot** on a Lyra Zero W and the cause is not yet known:
 
 ```sh
 cd template/boot
