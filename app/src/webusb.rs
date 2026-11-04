@@ -195,10 +195,13 @@ impl WebUsbTransport {
 #[async_trait(?Send)]
 impl Transport for WebUsbTransport {
     async fn bulk_out(&mut self, data: &[u8]) -> Result<usize, TransportError> {
-        // transfer_out_with_u8_slice copies into a JS buffer for us.
+        // Copy into a JS-owned buffer first. Passing a view into wasm linear
+        // memory across an await risks the view being detached if wasm memory
+        // grows, so hand WebUSB something it owns outright.
+        let buf = js_sys::Uint8Array::from(data);
         let promise = self
             .device
-            .transfer_out_with_u8_slice(self.endpoints.bulk_out, &mut data.to_vec())
+            .transfer_out_with_buffer_source(self.endpoints.bulk_out, &buf)
             .map_err(|e| js_err("bulk out", e))?;
         let result: web_sys::UsbOutTransferResult = JsFuture::from(promise)
             .await
@@ -240,9 +243,10 @@ impl Transport for WebUsbTransport {
             UsbRequestType::Vendor,
             setup.value,
         );
+        let buf = js_sys::Uint8Array::from(data);
         let promise = self
             .device
-            .control_transfer_out_with_u8_slice(&params, &mut data.to_vec())
+            .control_transfer_out_with_buffer_source(&params, &buf)
             .map_err(|e| js_err("control out", e))?;
         let result: web_sys::UsbOutTransferResult = JsFuture::from(promise)
             .await
