@@ -34,19 +34,56 @@
 <div id="compat" class="notice notice-error" hidden></div>
 
 <nav class="segmented" role="tablist">
-  <button class="tab active" data-tab="device" role="tab">Device</button>
+  <button class="tab active" data-tab="quick" role="tab">Quick flash</button>
+  <button class="tab" data-tab="device" role="tab">Device</button>
   <button class="tab" data-tab="flash" role="tab">Flash</button>
   <button class="tab" data-tab="storage" role="tab">Storage</button>
   <button class="tab" data-tab="memory" role="tab">Memory</button>
-  <button class="tab" data-tab="otp" role="tab">eFuse</button>
+  <button class="tab" id="tab-otp" data-tab="otp" role="tab">eFuse</button>
   <button class="tab" data-tab="console" role="tab">Console</button>
   <button class="tab" data-tab="settings" role="tab">Settings</button>
 </nav>
 
 <main>
 
+<!-- Quick flash -->
+<section id="panel-quick" class="panel active">
+  <div class="grid">
+    <section class="card span">
+      <h2>Quick flash</h2>
+      <p class="note">
+        Choose an <code>update.img</code>. Every check runs before anything is written,
+        and nothing is written until you confirm.
+      </p>
+      <label class="dropzone" for="file-quick">
+        <input type="file" id="file-quick" accept=".img">
+        <span>Choose an <code>update.img</code></span>
+      </label>
+
+      <ol id="quick-checks" class="checks" hidden></ol>
+
+      <table id="quick-plan" class="table" hidden>
+        <thead><tr><th>Write</th><th>From</th><th>To sector</th><th>Size</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <div id="quick-verdict" class="summary" hidden></div>
+
+      <div class="actions">
+        <button id="btn-quick-flash" class="btn btn-filled" disabled>Confirm and flash</button>
+        <button id="btn-quick-recheck" class="btn" disabled>Run checks again</button>
+      </div>
+
+      <div class="progress-row" hidden id="quick-progress-wrap">
+        <div class="track"><div id="quick-progress" class="fill"></div></div>
+        <span id="quick-progress-label">idle</span>
+      </div>
+    </section>
+  </div>
+</section>
+
 <!-- Device -->
-<section id="panel-device" class="panel active">
+<section id="panel-device" class="panel">
   <div class="grid">
     <section class="card">
       <h2>Connection</h2>
@@ -187,7 +224,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card advanced">
       <h2>Erase</h2>
       <p class="note warn">These destroy data on the selected storage.</p>
       <div class="actions">
@@ -246,7 +283,7 @@
       <pre id="rl-out" class="output hex" hidden></pre>
     </section>
 
-    <section class="card">
+    <section class="card advanced">
       <h2>Write sectors</h2>
       <p class="note warn">Writes a file straight to a raw sector offset.</p>
       <div class="param-list">
@@ -275,13 +312,15 @@
       <div class="actions">
         <button id="btn-read-sdram" class="btn btn-tinted" disabled>Read</button>
       </div>
-      <label class="dropzone" for="file-sdram">
-        <input type="file" id="file-sdram">
-        <span>Choose a file to load</span>
-      </label>
-      <div class="actions">
-        <button id="btn-write-sdram" class="btn btn-danger" disabled>Write</button>
-        <button id="btn-exec-sdram" class="btn btn-danger" disabled>Execute</button>
+      <div class="advanced">
+        <label class="dropzone" for="file-sdram">
+          <input type="file" id="file-sdram">
+          <span>Choose a file to load</span>
+        </label>
+        <div class="actions">
+          <button id="btn-write-sdram" class="btn btn-danger" disabled>Write</button>
+          <button id="btn-exec-sdram" class="btn btn-danger" disabled>Execute</button>
+        </div>
       </div>
       <pre id="sdram-out" class="output hex" hidden></pre>
     </section>
@@ -364,6 +403,16 @@
         <div><dt>Deployed</dt><dd id="about-deployed">Not checked</dd></div>
       </dl>
       <div id="update-notice" class="summary" hidden></div>
+      <label class="switch-row">
+        <span>Show destructive operations</span>
+        <input type="checkbox" id="chk-advanced" class="switch">
+      </label>
+      <p class="note">
+        Reveals the eFuse tab, every erase, raw sector writes, and DRAM write and execute.
+        Flashing an <code>update.img</code> needs none of them. Erasing the whole device
+        leaves a board this tool cannot revive, because it does not write an IDBlock, and
+        eFuse writes are permanent.
+      </p>
       <div class="actions wrap">
         <button id="btn-check-version" class="btn btn-tinted">Check for update</button>
         <button id="btn-reload" class="btn">Reload app</button>

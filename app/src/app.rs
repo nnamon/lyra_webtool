@@ -245,6 +245,7 @@ pub fn start() {
     wire_efuse(&ctx);
     wire_flash(&ctx);
     wire_serial(&ctx);
+    wire_quick(&ctx);
     wire_settings();
     wire_log();
 
@@ -889,6 +890,15 @@ fn wire_memory(ctx: &Ctx) {
     });
 }
 
+/// The wrapper element that holds a progress bar.
+fn progress_wrap(bar_id: &str) -> &'static str {
+    match bar_id {
+        "quick-progress" => "quick-progress-wrap",
+        "wl-progress" => "wl-progress-wrap",
+        _ => "flash-progress-wrap",
+    }
+}
+
 fn set_progress(bar_id: &str, label_id: &str, pct: u32, text: &str) {
     if let Some(el) = by_id(bar_id) {
         let _ = el.style().set_property("width", &format!("{pct}%"));
@@ -1160,11 +1170,10 @@ fn wire_flash(ctx: &Ctx) {
         {
             return;
         }
-        run_op(
-            &c,
-            "flashing",
-            move |ctx| async move { flash_image(ctx).await },
-        );
+        run_op(&c, "flashing", move |ctx| async move {
+            let chosen = selected_items();
+            flash_image(ctx, chosen, "flash-progress", "flash-progress-label").await
+        });
     });
 }
 
@@ -1333,7 +1342,12 @@ fn selected_items() -> Vec<usize> {
     out
 }
 
-async fn flash_image(ctx: Ctx) -> Result<String, String> {
+async fn flash_image(
+    ctx: Ctx,
+    chosen: Vec<usize>,
+    bar: &'static str,
+    label: &'static str,
+) -> Result<String, String> {
     // Snapshot what we need, so no borrow is held across the transfers.
     let (fw_offset, items, file, md5_expect, md5_len) = {
         let st = ctx.state.borrow();
@@ -1356,7 +1370,6 @@ async fn flash_image(ctx: Ctx) -> Result<String, String> {
         )
     };
 
-    let chosen = selected_items();
     if chosen.is_empty() {
         return Err("no items are selected".into());
     }
@@ -1375,12 +1388,7 @@ async fn flash_image(ctx: Ctx) -> Result<String, String> {
                     h.update(&chunk);
                     off = end;
                     let pct = (off as f64 / md5_len as f64 * 100.0) as u32;
-                    set_progress(
-                        "flash-progress",
-                        "flash-progress-label",
-                        pct,
-                        "verifying MD5",
-                    );
+                    set_progress(bar, label, pct, "verifying MD5");
                 }
                 let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
                 if got != expected {
@@ -1394,7 +1402,7 @@ async fn flash_image(ctx: Ctx) -> Result<String, String> {
         }
     }
 
-    set_hidden("flash-progress-wrap", false);
+    set_hidden(progress_wrap(bar), false);
     let total: u64 = chosen
         .iter()
         .filter_map(|i| items.get(*i))
@@ -1438,8 +1446,8 @@ async fn flash_image(ctx: Ctx) -> Result<String, String> {
                 100
             };
             set_progress(
-                "flash-progress",
-                "flash-progress-label",
+                bar,
+                label,
                 pct,
                 &format!("{} / {}", human_bytes(moved), human_bytes(total)),
             );
@@ -1582,6 +1590,414 @@ fn append_terminal(bytes: &[u8]) {
     }
 }
 
+// ───────────────────────────── quick flash ────────────────────────
+
+/// Outcome of one pre-flight check.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Check {
+    Pass,
+    Warn,
+    Fail,
+}
+
+impl Check {
+    fn class(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Warn => "warn",
+            Self::Fail => "fail",
+        }
+    }
+    fn word(self) -> &'static str {
+        match self {
+            Self::Pass => "ok",
+            Self::Warn => "note",
+            Self::Fail => "stop",
+        }
+    }
+}
+
+fn wire_quick(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_change("file-quick", move || {
+        let c = c.clone();
+        spawn_local(async move { quick_preflight(c).await });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-quick-recheck", move || {
+        let c = c.clone();
+        spawn_local(async move { quick_preflight(c).await });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-quick-flash", move || {
+        let plan = {
+            let st = c.state.borrow();
+            st.firmware
+                .as_ref()
+                .and_then(|f| f.firmware.as_ref())
+                .map(|inner| {
+                    inner
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, i)| i.is_writable())
+                        .map(|(n, _)| n)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        if plan.is_empty() {
+            log_err("nothing to write; run the checks first");
+            return;
+        }
+        let maskrom = c
+            .dev
+            .borrow()
+            .as_ref()
+            .map(|d| d.mode() == DeviceMode::Maskrom)
+            .unwrap_or(false);
+
+        if maskrom {
+            if !confirm(
+                "The board is in MaskROM. Download the loader first? \
+                 Nothing is written to flash by this step.",
+            ) {
+                return;
+            }
+            run_op(&c, "downloading boot", move |ctx| async move {
+                quick_bootstrap(ctx).await
+            });
+            return;
+        }
+
+        if !confirm(&format!(
+            "Write {} partition image(s) to the board? This replaces their contents.",
+            plan.len()
+        )) {
+            return;
+        }
+        run_op(&c, "flashing", move |ctx| async move {
+            flash_image(ctx, plan, "quick-progress", "quick-progress-label").await
+        });
+    });
+}
+
+/// Send the loader stages, then stop: the board re-enumerates and WebUSB needs
+/// a fresh permission gesture before it can be used again.
+async fn quick_bootstrap(ctx: Ctx) -> Result<String, String> {
+    let stages: Vec<(BootStage, String, Vec<u8>, u32)> = {
+        let st = ctx.state.borrow();
+        let boot = st.loader.as_ref().ok_or("image carries no loader")?;
+        let mut v = Vec::new();
+        for (ty, stage) in [
+            (EntryType::Entry471, BootStage::Ddr),
+            (EntryType::Entry472, BootStage::Loader),
+        ] {
+            for e in boot.entries_of(ty) {
+                v.push((
+                    stage,
+                    e.name.clone(),
+                    boot.entry_data(e).to_vec(),
+                    e.data_delay,
+                ));
+            }
+        }
+        v
+    };
+    for (stage, name, data, delay) in &stages {
+        {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.send_boot_stage(*stage, data).await.map_err(|e| {
+                format!(
+                    "{:?} entry {name} ({} bytes) rejected: {e}",
+                    stage,
+                    data.len()
+                )
+            })?;
+        }
+        log(&format!(
+            "sent {:?} {name}: {}",
+            stage,
+            human_bytes(data.len() as u64)
+        ));
+        sleep_ms((*delay).max(50)).await;
+    }
+    if let Some(dev) = ctx.dev.borrow_mut().take() {
+        let _ = dev.into_transport().close().await;
+    }
+    for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
+        set_text(id, "Reconnect");
+    }
+    log_warn("loader running. Press Connect, then Confirm and flash again.");
+    Ok("loader downloaded".into())
+}
+
+/// Run every check against the chosen image and the attached board, then
+/// decide whether flashing is allowed.
+async fn quick_preflight(ctx: Ctx) {
+    let Some(f) = dom::file("file-quick") else {
+        return;
+    };
+    let mut checks: Vec<(Check, String, String)> = Vec::new();
+    let mut fatal = false;
+
+    // 1. Container header.
+    let head = match read_file_range(&f, 0, RKFW_HEADER_LEN as u32).await {
+        Ok(h) => h,
+        Err(e) => {
+            render_checks(&[(Check::Fail, "File".into(), e)], None, true);
+            return;
+        }
+    };
+    let header = match UpdateImage::parse_header(&head) {
+        Ok(h) => {
+            checks.push((
+                Check::Pass,
+                "Container".into(),
+                format!("RKFW, chip {}, built {}", h.chip_name(), h.release_time),
+            ));
+            h
+        }
+        Err(e) => {
+            render_checks(
+                &[(Check::Fail, "Container".into(), format!("{e}"))],
+                None,
+                true,
+            );
+            return;
+        }
+    };
+
+    // 2. Embedded loader, needed only to leave MaskROM.
+    let mut loader = None;
+    if header.boot_size > 0 {
+        let r = header.boot_range();
+        match read_file_range(&f, r.start as u32, r.end as u32).await {
+            Ok(bytes) => match RkBoot::parse(&bytes, true) {
+                Ok(b) => {
+                    checks.push((
+                        Check::Pass,
+                        "Loader".into(),
+                        format!("{} entries, CRC32 verified", b.entries.len()),
+                    ));
+                    loader = Some(b);
+                }
+                Err(e) => checks.push((Check::Warn, "Loader".into(), format!("{e}"))),
+            },
+            Err(e) => checks.push((Check::Warn, "Loader".into(), e)),
+        }
+    } else {
+        checks.push((
+            Check::Warn,
+            "Loader".into(),
+            "none embedded; MaskROM needs a separate loader".into(),
+        ));
+    }
+
+    // 3. Item table.
+    let fw_start = header.fw_offset as u64;
+    let prefix_len = (header.fw_size as u64).min(64 * 1024);
+    let inner = match read_file_range(&f, fw_start as u32, (fw_start + prefix_len) as u32).await {
+        Ok(prefix) => match rockusb::image::RkafFirmware::parse_table(&prefix) {
+            Ok(fw) => {
+                checks.push((
+                    Check::Pass,
+                    "Item table".into(),
+                    format!(
+                        "{} items, {} to write, firmware {}",
+                        fw.items.len(),
+                        fw.writable_items().count(),
+                        fw.version_string()
+                    ),
+                ));
+                Some(fw)
+            }
+            Err(e) => {
+                checks.push((Check::Fail, "Item table".into(), format!("{e}")));
+                fatal = true;
+                None
+            }
+        },
+        Err(e) => {
+            checks.push((Check::Fail, "Item table".into(), e));
+            fatal = true;
+            None
+        }
+    };
+
+    // 4. Targets and partition fit.
+    if let Some(fw) = &inner {
+        let writable: Vec<_> = fw.writable_items().collect();
+        if writable.is_empty() {
+            checks.push((Check::Fail, "Targets".into(), "nothing is writable".into()));
+            fatal = true;
+        } else {
+            let targets = writable
+                .iter()
+                .map(|i| format!("{} {:#x}", i.name, i.target_sector))
+                .collect::<Vec<_>>()
+                .join(", ");
+            checks.push((Check::Pass, "Targets".into(), targets));
+        }
+        let over: Vec<&str> = fw
+            .items
+            .iter()
+            .filter(|i| i.overflows_partition())
+            .map(|i| i.name.as_str())
+            .collect();
+        if over.is_empty() {
+            checks.push((
+                Check::Pass,
+                "Partition fit".into(),
+                "every image fits its partition".into(),
+            ));
+        } else {
+            checks.push((
+                Check::Fail,
+                "Partition fit".into(),
+                format!("too large: {}", over.join(", ")),
+            ));
+            fatal = true;
+        }
+        let skipped: Vec<&str> = fw
+            .items
+            .iter()
+            .filter(|i| !i.is_writable())
+            .map(|i| i.name.as_str())
+            .collect();
+        if !skipped.is_empty() {
+            checks.push((
+                Check::Warn,
+                "Not written".into(),
+                format!("{} (board keeps its own)", skipped.join(", ")),
+            ));
+        }
+    }
+
+    // 5. Integrity.
+    match &header.stored_md5 {
+        Some(_) => checks.push((
+            Check::Pass,
+            "Checksum".into(),
+            "MD5 present, verified before writing".into(),
+        )),
+        None => checks.push((
+            Check::Warn,
+            "Checksum".into(),
+            "image carries no MD5".into(),
+        )),
+    }
+
+    // 6. The board.
+    let (connected, mode) = {
+        let d = ctx.dev.borrow();
+        (d.is_some(), d.as_ref().map(|d| d.mode()))
+    };
+    match (connected, mode) {
+        (false, _) => {
+            checks.push((
+                Check::Fail,
+                "Board".into(),
+                "not connected; press Connect".into(),
+            ));
+            fatal = true;
+        }
+        (true, Some(DeviceMode::Loader)) => checks.push((
+            Check::Pass,
+            "Board".into(),
+            "connected in Loader mode".into(),
+        )),
+        (true, _) => checks.push((
+            Check::Warn,
+            "Board".into(),
+            "in MaskROM; the loader is downloaded first".into(),
+        )),
+    }
+
+    // Keep what the flash step needs.
+    {
+        let mut st = ctx.state.borrow_mut();
+        if let Some(b) = loader {
+            st.loader = Some(b);
+        }
+        st.image_file = Some(f);
+        st.firmware = inner.as_ref().map(|fw| Firmware {
+            header,
+            loader: None,
+            firmware: Some(fw.clone()),
+        });
+    }
+
+    render_checks(&checks, inner.as_ref(), fatal);
+    refresh(&ctx);
+}
+
+fn render_checks(
+    checks: &[(Check, String, String)],
+    inner: Option<&rockusb::image::RkafFirmware>,
+    fatal: bool,
+) {
+    let rows: String = checks
+        .iter()
+        .map(|(state, label, detail)| {
+            format!(
+                "<li class=\"{}\"><span class=\"state\">{}</span>\
+                 <span class=\"label\">{}</span><span class=\"detail\">{}</span></li>",
+                state.class(),
+                state.word(),
+                escape_html(label),
+                escape_html(detail)
+            )
+        })
+        .collect();
+    set_html("quick-checks", &rows);
+    set_hidden("quick-checks", false);
+
+    if let Some(fw) = inner {
+        let body: String = fw
+            .writable_items()
+            .map(|i| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>{} ({:#x})</td><td>{}</td></tr>",
+                    escape_html(&i.name),
+                    escape_html(&i.file_name),
+                    i.target_sector,
+                    i.target_byte_offset(),
+                    human_bytes(i.data_size as u64)
+                )
+            })
+            .collect();
+        if let Some(tbody) = doc().query_selector("#quick-plan tbody").ok().flatten() {
+            tbody.set_inner_html(&body);
+        }
+        set_hidden("quick-plan", false);
+    } else {
+        set_hidden("quick-plan", true);
+    }
+
+    let failures = checks.iter().filter(|(s, _, _)| *s == Check::Fail).count();
+    let verdict = if fatal || failures > 0 {
+        format!("{failures} check(s) failed. Nothing will be written.")
+    } else {
+        let n = inner.map(|f| f.writable_items().count()).unwrap_or(0);
+        format!("All checks passed. {n} image(s) ready to write.")
+    };
+    set_text("quick-verdict", &verdict);
+    if let Some(el) = by_id("quick-verdict") {
+        el.set_class_name(if fatal || failures > 0 {
+            "summary bad"
+        } else {
+            "summary ready"
+        });
+    }
+    set_hidden("quick-verdict", false);
+    set_disabled("btn-quick-flash", fatal || failures > 0);
+    set_disabled("btn-quick-recheck", false);
+}
+
 // ───────────────────────────── settings ───────────────────────────
 
 /// Version this build reports, from the workspace manifest.
@@ -1599,9 +2015,78 @@ fn build_stamp() -> String {
     }
 }
 
+/// Key the destructive-operations preference is stored under.
+const ADVANCED_KEY: &str = "lyra.advanced";
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+/// Show or hide every control that can destroy a board.
+///
+/// Flashing an `update.img` needs none of them, and two are unrecoverable
+/// here: a whole-device erase leaves no IDBlock to boot from, and eFuse
+/// writes are permanent.
+fn set_advanced(on: bool) {
+    if let Ok(list) = doc().query_selector_all(".advanced") {
+        for i in 0..list.length() {
+            let Some(node) = list.item(i) else { continue };
+            if let Ok(el) = node.dyn_into::<web_sys::HtmlElement>() {
+                el.set_hidden(!on);
+            }
+        }
+    }
+    set_hidden("tab-otp", !on);
+
+    // Don't strand the user on a panel that just disappeared.
+    if !on {
+        let on_otp = doc()
+            .get_element_by_id("panel-otp")
+            .map(|e| e.class_name().contains("active"))
+            .unwrap_or(false);
+        if on_otp {
+            if let Some(tab) = doc()
+                .query_selector(".tab[data-tab='device']")
+                .ok()
+                .flatten()
+            {
+                if let Ok(tab) = tab.dyn_into::<web_sys::HtmlElement>() {
+                    tab.click();
+                }
+            }
+        }
+    }
+
+    if let Some(store) = local_storage() {
+        let _ = store.set_item(ADVANCED_KEY, if on { "1" } else { "0" });
+    }
+}
+
 fn wire_settings() {
     set_text("about-version", VERSION);
     set_text("about-build", &build_stamp());
+
+    // Off unless the user previously turned it on.
+    let remembered = local_storage()
+        .and_then(|s| s.get_item(ADVANCED_KEY).ok().flatten())
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if let Some(el) = doc().get_element_by_id("chk-advanced") {
+        if let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() {
+            input.set_checked(remembered);
+        }
+    }
+    set_advanced(remembered);
+
+    on_change("chk-advanced", || {
+        let on = is_checked("chk-advanced");
+        set_advanced(on);
+        if on {
+            log_warn("destructive operations shown: erase, raw writes and eFuse");
+        } else {
+            log("destructive operations hidden");
+        }
+    });
 
     on_click("btn-reload", || {
         if let Some(win) = web_sys::window() {

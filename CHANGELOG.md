@@ -2,6 +2,14 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.7.0 · 2026-11-04
+
+- Quick flash is the first tab. Choose an `update.img`, read the checks, confirm, and it writes. It is the whole flashing path in one screen.
+- The checks cover the container, the embedded loader and its CRC, the item table, the flash targets, whether each image fits its partition, the checksum, and the board's mode. Any failure disables the flash button.
+- Quick flash lists exactly what it will write and where before you confirm.
+- From MaskROM, Quick flash downloads the loader first, then asks you to reconnect and confirm again.
+- Erase, raw sector writes, DRAM write and execute, and the whole eFuse tab are hidden unless Settings turns on "Show destructive operations". None of them is needed to flash firmware, and two of them can leave a board this tool cannot recover.
+
 ## 0.6.0 · 2026-11-04
 
 - Device tab can treat the board as Loader or MaskROM when the detected mode is wrong. Mode comes from the USB descriptor, and a board in Loader that reads as MaskROM would otherwise leave the write controls disabled.
