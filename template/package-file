@@ -1,7 +1,0 @@
-# NAME	PATH
-package-file	package-file
-parameter	parameter.txt
-bootloader	MiniLoaderAll.bin
-uboot	uboot.img
-boot	boot.img
-rootfs	rootfs.img

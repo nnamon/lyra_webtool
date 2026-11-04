@@ -124,10 +124,15 @@ The debug UART is UART0 at 1500000 baud, which the Console tab opens over Web
 Serial. It needs a 3.3 V USB-to-TTL adapter that can run at 1.5 Mbaud; many
 CP210x and PL2303 cables cannot.
 
-## Building your own images
+## Building firmware
 
-`template/` packs an `update.img` from loose files, and `rkimage` unpacks and
-packs containers:
+This repository flashes images. Building and modifying them is a separate
+project: [lyra-firmware](https://github.com/nnamon/lyra-firmware) runs the
+Luckfox SDK in Docker, edits the UBI root filesystem, and cross-compiles for
+the board.
+
+`rkimage` stays here, because it is the same container parser the flasher
+uses, exercised from a shell:
 
 ```sh
 cargo run -p rockusb --bin rkimage -- info      update.img
@@ -137,74 +142,7 @@ cargo run -p rockusb --bin rkimage -- roundtrip update.img
 ```
 
 `roundtrip` repacks what it unpacked and compares the bytes, so you can check
-the packer reproduces a vendor image exactly before relying on it. See
-[template/README.md](template/README.md).
-
-## Changing what runs on the board
-
-Packing an `update.img` only rearranges partition images. To change the Linux
-environment itself, read [docs/linux.md](docs/linux.md), which covers three
-routes: editing the running board, rebuilding `rootfs.img` offline, and
-rebuilding from the Luckfox SDK.
-
-`rootfs.img` is a UBI image holding a UBIFS filesystem, so it has no loop
-mount. `template/rootfs/ubifs.sh` unpacks and repacks it in Docker, with the
-geometry read out of the SDK:
-
-```sh
-cd template/rootfs
-./ubifs.sh info      /path/to/rootfs.img   # geometry the vendor used
-./ubifs.sh roundtrip /path/to/rootfs.img   # check nothing is lost
-./ubifs.sh unpack    /path/to/rootfs.img
-./ubifs.sh shell                           # edit the tree as root
-./ubifs.sh pack      new-rootfs.img
-```
-
-To cross-compile a program for the board without the SDK, use
-`template/rootfs/cross/`. It targets armv7-a hard float and glibc 2.38, and
-`cross.sh check` refuses a binary the board cannot load.
-
-```sh
-cd template/rootfs/cross
-./cross.sh cc -O2 hello.c -o hello
-./cross.sh check hello
-./cross.sh run hello               # against the image's own libc, emulated
-```
-
-To add a package, change the kernel, or change the device tree, build from the
-Luckfox SDK. `template/sdk/` runs that in Docker too:
-
-```sh
-cd template/sdk
-./sdk.sh init ~/Downloads/luckfox-lyra-241213.tar.gz
-./sdk.sh build rootfs
-./sdk.sh fetch
-```
-
-That follows Luckfox's own
-[SDK compilation](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation)
-and [Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration)
-pages for the Lyra, in a container. `fetch` replaces `uboot.img`, `boot.img`
-and `rootfs.img` and keeps the vendor loader.
-
-Both setups keep their work in a Docker volume rather than a directory. For
-the SDK that is forced: it checks the filesystem type of its own source tree
-and refuses anything that is not ext4.
-
-## Turning on a peripheral
-
-A pin that no enabled device tree node claims is already usable as GPIO, so a
-userspace driver needs no firmware change and cannot stop the board booting.
-Check first, before changing anything.
-
-If you do need the device tree changed, build `boot.img` from the Luckfox SDK
-with `template/sdk/sdk.sh build kernel`. It packs the FIT the way the vendor's
-was. Repacking `boot.img` by hand produces an image that does not boot.
-
-`template/rootfs/epaper/` is a worked example: a Waveshare 2.7inch e-Paper
-HAT demo that starts at boot. The HAT seats on the Lyra header directly, and
-the demo drives all seven of its pins as plain GPIO, so the vendor `boot.img`
-is used unchanged.
+the parser reproduces a vendor image exactly before relying on it.
 
 ## Building
 
@@ -236,13 +174,7 @@ app/                wasm crate
   serial.rs           UART console over Web Serial
   app.rs  dom.rs      state, event wiring, DOM helpers
 www/                static site, the Pages artifact
-template/           pack an update.img from loose files
-  rootfs/             unpack and repack the UBI root filesystem
-    cross/              cross-compile for the board, and check the ABI
-    epaper/             2.7inch e-Paper HAT demo, starts at boot
-  sdk/                build the Luckfox SDK in Docker
 docs/protocol.md    reverse-engineering notes
-docs/linux.md       changing the Linux environment on the board
 ```
 
 `rockusb` has no browser dependency, so it tests natively:

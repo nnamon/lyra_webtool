@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.16.0 · 2026-11-05
+
+- Split the firmware tooling out to [lyra-firmware](https://github.com/nnamon/lyra-firmware). This repository flashes a board from a browser; building and editing the images it writes is a different job, and keeping both here buried the one instruction that matters.
+- Moved: `template/sdk/`, `template/rootfs/` with its cross toolchain and e-Paper demo, `template/build.sh`, `image.conf`, and `docs/linux.md`.
+- `rkimage` stays, because it is the same container parser the flasher uses, exercised from a shell. `lyra-firmware`'s `build.sh` finds it on `PATH`, in a sibling checkout, or via `LYRA_WEBTOOL`.
+
 ## 0.15.1 · 2026-11-05
 
 - Corrected the provenance of `kernel-config`. The SDK README said it was not on a vendor page and rested on a forum report; Luckfox's own Lyra kernel configuration page gives it, as the Buildroot page gives `buildroot-config`. Both are now cited.
