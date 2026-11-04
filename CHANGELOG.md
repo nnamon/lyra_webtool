@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.9.0 · 2026-11-04
+
+- Fixes the status command, which had never worked. It asked for a data phase the device does not send, so it consumed the status reply as data and always failed. Mode detection depended on it, so every board was reported as MaskROM.
+- Test ready reports the progress counters a board sends during long operations.
+- A failed mode probe logs the reason instead of only the verdict.
+
 ## 0.8.0 · 2026-11-04
 
 - Mode is decided by asking the board, not by reading its USB descriptor. A Loader answers a status command and MaskROM does not, so the answer is definitive.

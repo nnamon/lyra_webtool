@@ -11,6 +11,7 @@ use rockusb::device::{Device, DeviceMode};
 use rockusb::image::{Firmware, UpdateImage, RKFW_HEADER_LEN};
 use rockusb::loader::{EntryType, RkBoot};
 use rockusb::protocol::{BootStage, ResetOpcode, StorageMedia, SECTOR_SIZE};
+use rockusb::transport::Transport as _;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::dom::{self, *};
@@ -353,13 +354,29 @@ fn wire_connection(ctx: &Ctx) {
             // Ask the device rather than trust the descriptor. A Loader
             // answers TestUnitReady; MaskROM only takes 471/472.
             let mut device = Device::new(transport, guessed);
-            let probed = device.probe_mode().await;
-            log(&format!(
-                "mode probe: {} answered TestUnitReady = {}, bcdUSB {usb_ver:#06x} suggested {}",
-                probed.as_str(),
-                probed == DeviceMode::Loader,
-                guessed.as_str()
-            ));
+            let ready = device.test_unit_ready().await;
+            let probed = match &ready {
+                Ok(_) => DeviceMode::Loader,
+                Err(_) => {
+                    let _ = device.transport_mut().clear_halt().await;
+                    DeviceMode::Maskrom
+                }
+            };
+            device.set_mode(probed);
+            match &ready {
+                Ok(s) => log(&format!(
+                    "mode probe: Loader, TestUnitReady answered (progress {}/{}), \
+                     bcdUSB {usb_ver:#06x} suggested {}",
+                    s.current,
+                    s.total,
+                    guessed.as_str()
+                )),
+                Err(e) => log(&format!(
+                    "mode probe: Maskrom, TestUnitReady failed ({e}), \
+                     bcdUSB {usb_ver:#06x} suggested {}",
+                    guessed.as_str()
+                )),
+            }
 
             let mode = match value("sel-mode").as_str() {
                 "loader" => DeviceMode::Loader,
@@ -520,7 +537,10 @@ fn wire_device_info(ctx: &Ctx) {
                 .test_unit_ready()
                 .await
                 .map_err(|e| format!("device not ready: {e}"))?;
-            Ok(format!("device ready, status {}", dom::hex(&status)))
+            Ok(format!(
+                "device ready (progress {}/{})",
+                status.current, status.total
+            ))
         });
     });
 }

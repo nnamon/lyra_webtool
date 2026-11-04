@@ -210,6 +210,26 @@ impl Capability {
     }
 }
 
+/// Progress a device reports alongside `TestUnitReady`.
+///
+/// Both counts live in the status wrapper's residue field as big-endian
+/// 16-bit values, which is how `RKU_TestDeviceReady` decodes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReadyStatus {
+    pub total: u16,
+    pub current: u16,
+}
+
+impl ReadyStatus {
+    /// Decode the two counts out of a residue word.
+    pub fn from_residue(residue: u32) -> Self {
+        Self {
+            total: ((residue & 0xffff) as u16).swap_bytes(),
+            current: (((residue >> 16) & 0xffff) as u16).swap_bytes(),
+        }
+    }
+}
+
 /// Default sectors moved per LBA transfer (64 KiB).
 pub const DEFAULT_LBA_CHUNK_SECTORS: u16 = 128;
 
@@ -290,6 +310,11 @@ impl<T: Transport> Device<T> {
     /// `payload` must be `Some` for an OUT opcode and `None` for an IN opcode;
     /// the returned buffer is the IN data phase, empty for OUT commands.
     async fn execute(&mut self, cbw: Cbw, payload: Option<&[u8]>) -> Result<Vec<u8>> {
+        self.execute_full(cbw, payload).await.map(|(data, _)| data)
+    }
+
+    /// Run one command and return both the data phase and the status wrapper.
+    async fn execute_full(&mut self, cbw: Cbw, payload: Option<&[u8]>) -> Result<(Vec<u8>, Csw)> {
         let opcode = cbw.opcode;
         let tag = cbw.tag;
 
@@ -330,7 +355,7 @@ impl<T: Transport> Device<T> {
             }
             .into());
         }
-        Ok(data)
+        Ok((data, csw))
     }
 
     /// Issue an IN command and return exactly `len` bytes of reply.
@@ -355,11 +380,25 @@ impl<T: Transport> Device<T> {
 
     // ---- status ---------------------------------------------------------
 
-    /// `TestUnitReady`. Returns the raw 6-byte status the device reports.
+    /// `TestUnitReady`, optionally carrying a sub-code.
     ///
-    /// The tool logs this as `subCode` and `RetCode` when a device misbehaves.
-    pub async fn test_unit_ready(&mut self) -> Result<Vec<u8>> {
-        self.query(Opcode::TestUnitReady, 6).await
+    /// There is **no data phase**: `RKU_TestDeviceReady` at `0x4494c0` writes
+    /// the 31-byte wrapper and reads the 13-byte status straight back. An
+    /// earlier version of this method asked for a 6-byte data phase, which
+    /// consumed the status wrapper as data and made the command always fail.
+    ///
+    /// Long operations report progress through the status wrapper's residue,
+    /// as two big-endian 16-bit counts.
+    pub async fn test_unit_ready_with(&mut self, sub_code: u8) -> Result<ReadyStatus> {
+        let tag = self.next_tag();
+        let cbw = Cbw::new(tag, Opcode::TestUnitReady).with_sub_opcode(sub_code);
+        let (_, csw) = self.execute_full(cbw, None).await?;
+        Ok(ReadyStatus::from_residue(csw.residue))
+    }
+
+    /// `TestUnitReady` with no sub-code.
+    pub async fn test_unit_ready(&mut self) -> Result<ReadyStatus> {
+        self.test_unit_ready_with(0).await
     }
 
     /// True when the device answers `TestUnitReady` without error.
@@ -997,10 +1036,38 @@ mod tests {
         );
     }
 
+    /// The command must be a bare CBW plus CSW. A data phase here is what
+    /// broke mode detection.
+    #[test]
+    fn test_unit_ready_has_no_data_phase() {
+        let mut d = dev();
+        d.transport_mut().push_ok_csw();
+        block_on(d.test_unit_ready()).expect("test_unit_ready");
+
+        let writes = &d.transport_mut().writes;
+        assert_eq!(writes.len(), 1, "only the command wrapper is written");
+        let cbw = &writes[0];
+        assert_eq!(cbw.len(), 31);
+        assert_eq!(cbw[15], 0x00, "TestUnitReady opcode");
+        assert_eq!(
+            u32::from_le_bytes([cbw[8], cbw[9], cbw[10], cbw[11]]),
+            0,
+            "no bytes may be requested"
+        );
+    }
+
+    #[test]
+    fn ready_status_decodes_big_endian_counts() {
+        // residue bytes 11 22 33 44 -> total 0x1122, current 0x3344
+        let residue = u32::from_le_bytes([0x11, 0x22, 0x33, 0x44]);
+        let s = ReadyStatus::from_residue(residue);
+        assert_eq!(s.total, 0x1122);
+        assert_eq!(s.current, 0x3344);
+    }
+
     #[test]
     fn probe_reports_loader_when_the_device_answers() {
         let mut d = Device::new(FakeTransport::new(), DeviceMode::Maskrom);
-        d.transport_mut().push_read(vec![0u8; 6]);
         d.transport_mut().push_ok_csw();
         assert_eq!(block_on(d.probe_mode()), DeviceMode::Loader);
         assert_eq!(d.mode(), DeviceMode::Loader, "probe records what it found");

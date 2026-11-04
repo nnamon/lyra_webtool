@@ -29,6 +29,6 @@ pub mod protocol;
 pub mod rc4;
 pub mod transport;
 
-pub use device::{Capability, Device, DeviceMode, Error, FlashInfo};
+pub use device::{Capability, Device, DeviceMode, Error, FlashInfo, ReadyStatus};
 pub use protocol::{BootStage, Opcode, ResetOpcode, StorageMedia, ROCKCHIP_VID, SECTOR_SIZE};
 pub use transport::{Transport, TransportError};
