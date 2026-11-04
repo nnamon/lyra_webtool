@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use rockusb::protocol::ROCKCHIP_VID;
-use rockusb::transport::{ControlSetup, Transport, TransportError};
+use rockusb::transport::{ControlSetup, Transport, TransportError, VENDOR_REQUEST_TYPE_OUT};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -182,6 +182,63 @@ impl WebUsbTransport {
         self.device.product_name()
     }
 
+    /// Describe the configuration descriptor and which interface was claimed.
+    ///
+    /// A board that refuses the 471/472 bootstrap usually differs here: a
+    /// composite device, an unexpected interface class, or a second interface
+    /// that should have been claimed instead.
+    pub fn describe(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "bcdUSB {:#06x}, class {:#04x}, configurations {}",
+            self.usb_version(),
+            self.device.device_class(),
+            self.device.configurations().length()
+        ));
+        let configs = self.device.configurations();
+        for ci in 0..configs.length() {
+            let Ok(config) = configs.get(ci).dyn_into::<UsbConfiguration>() else {
+                continue;
+            };
+            out.push_str(&format!(
+                "\n  config {}: {} interface(s)",
+                config.configuration_value(),
+                config.interfaces().length()
+            ));
+            let interfaces = config.interfaces();
+            for ii in 0..interfaces.length() {
+                let Ok(iface) = interfaces.get(ii).dyn_into::<web_sys::UsbInterface>() else {
+                    continue;
+                };
+                let alt = iface.alternate();
+                let claimed = iface.interface_number() == self.endpoints.interface
+                    && config.configuration_value() == self.endpoints.configuration;
+                out.push_str(&format!(
+                    "\n    interface {}: class {:#04x}/{:#04x}/{:#04x}{}",
+                    iface.interface_number(),
+                    alt.interface_class(),
+                    alt.interface_subclass(),
+                    alt.interface_protocol(),
+                    if claimed { "  [claimed]" } else { "" }
+                ));
+                let endpoints = alt.endpoints();
+                for ei in 0..endpoints.length() {
+                    let Ok(ep) = endpoints.get(ei).dyn_into::<web_sys::UsbEndpoint>() else {
+                        continue;
+                    };
+                    out.push_str(&format!(
+                        "\n      ep {} {:?} {:?} max {}",
+                        ep.endpoint_number(),
+                        ep.direction(),
+                        ep.type_(),
+                        ep.packet_size()
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     /// Release the interface and close the handle.
     pub async fn close(&self) -> Result<(), TransportError> {
         let _ = JsFuture::from(self.device.release_interface(self.endpoints.interface)).await;
@@ -243,14 +300,23 @@ impl Transport for WebUsbTransport {
             UsbRequestType::Vendor,
             setup.value,
         );
+        let what = format!(
+            "control out (bmRequestType {:#04x}, bRequest {:#04x}, wValue {:#06x}, \
+             wIndex {:#06x}, {} bytes)",
+            VENDOR_REQUEST_TYPE_OUT,
+            setup.request,
+            setup.value,
+            setup.index,
+            data.len()
+        );
         let buf = js_sys::Uint8Array::from(data);
         let promise = self
             .device
             .control_transfer_out_with_buffer_source(&params, &buf)
-            .map_err(|e| js_err("control out", e))?;
+            .map_err(|e| js_err(&what, e))?;
         let result: web_sys::UsbOutTransferResult = JsFuture::from(promise)
             .await
-            .map_err(|e| js_err("control out", e))?
+            .map_err(|e| js_err(&what, e))?
             .dyn_into()
             .map_err(|_| TransportError::Backend("control out returned no result".into()))?;
         // MaskROM reports 0 bytes written for an accepted bootstrap chunk on

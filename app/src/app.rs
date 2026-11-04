@@ -346,6 +346,7 @@ fn wire_connection(ctx: &Ctx) {
                 .serial_number()
                 .unwrap_or_else(|| "Not reported".into());
             let mode = DeviceMode::from_bcd_usb(usb_ver);
+            log(&format!("USB layout: {}", transport.describe()));
 
             set_text("dev-mode", mode.as_str());
             set_text("dev-vidpid", &format!("{vid:04x}:{pid:04x}"));
@@ -951,49 +952,56 @@ fn wire_flash(ctx: &Ctx) {
                 return;
             };
             match read_file(&f).await {
-                Ok(bytes) => match RkBoot::parse(&bytes, true) {
-                    Ok(boot) => {
-                        let mut s = format!(
-                            "{}  ·  {}  ·  chip {}\nreleased {}  ·  CRC32 {:#010x} verified\n",
+                Ok(bytes) => {
+                    match RkBoot::parse(&bytes, true) {
+                        Ok(boot) => {
+                            let mut s =
+                                format!(
+                            "{}  ·  {}  ·  chip {}\nreleased {}  ·  CRC32 {:#010x} verified\n\
+                             signed {}  ·  rc4 {}\n",
                             f.name(),
                             human_bytes(bytes.len() as u64),
                             boot.chip_name(),
                             boot.release_time,
-                            boot.stored_crc
+                            boot.stored_crc,
+                            boot.signed,
+                            if boot.rc4_disabled { "disabled" } else { "ENABLED" },
                         );
-                        for ty in [EntryType::Entry471, EntryType::Entry472, EntryType::Loader] {
-                            for e in boot.entries_of(ty) {
-                                s.push_str(&format!(
-                                    "  {:?}  {:<24} {}\n",
-                                    ty,
-                                    e.name,
-                                    human_bytes(e.data_size as u64)
-                                ));
+                            for ty in [EntryType::Entry471, EntryType::Entry472, EntryType::Loader]
+                            {
+                                for e in boot.entries_of(ty) {
+                                    s.push_str(&format!(
+                                        "  {:?}  {:<24} {}\n",
+                                        ty,
+                                        e.name,
+                                        human_bytes(e.data_size as u64)
+                                    ));
+                                }
                             }
+                            set_text("loader-summary", &s);
+                            if let Some(el) = by_id("loader-summary") {
+                                el.set_class_name("summary");
+                            }
+                            set_hidden("loader-summary", false);
+                            log_ok(&format!("loader parsed: {} entries", boot.entries.len()));
+                            c.state.borrow_mut().loader = Some(boot);
+                            refresh(&c);
                         }
-                        set_text("loader-summary", &s);
-                        if let Some(el) = by_id("loader-summary") {
-                            el.set_class_name("summary");
+                        Err(e) => {
+                            set_text(
+                                "loader-summary",
+                                &format!("{} is not a usable loader:\n{e}", f.name()),
+                            );
+                            if let Some(el) = by_id("loader-summary") {
+                                el.set_class_name("summary bad");
+                            }
+                            set_hidden("loader-summary", false);
+                            log_err(&format!("loader rejected: {e}"));
+                            c.state.borrow_mut().loader = None;
+                            refresh(&c);
                         }
-                        set_hidden("loader-summary", false);
-                        log_ok(&format!("loader parsed: {} entries", boot.entries.len()));
-                        c.state.borrow_mut().loader = Some(boot);
-                        refresh(&c);
                     }
-                    Err(e) => {
-                        set_text(
-                            "loader-summary",
-                            &format!("{} is not a usable loader:\n{e}", f.name()),
-                        );
-                        if let Some(el) = by_id("loader-summary") {
-                            el.set_class_name("summary bad");
-                        }
-                        set_hidden("loader-summary", false);
-                        log_err(&format!("loader rejected: {e}"));
-                        c.state.borrow_mut().loader = None;
-                        refresh(&c);
-                    }
-                },
+                }
                 Err(e) => log_err(&e),
             }
         });
@@ -1030,9 +1038,13 @@ fn wire_flash(ctx: &Ctx) {
                 {
                     let mut guard = ctx.dev.borrow_mut();
                     let dev = guard.as_mut().ok_or("no device")?;
-                    dev.send_boot_stage(*stage, data)
-                        .await
-                        .map_err(|e| format!("{:?} ({name}) failed: {e}", stage))?;
+                    dev.send_boot_stage(*stage, data).await.map_err(|e| {
+                        format!(
+                            "{:?} entry {name} ({} bytes) rejected: {e}",
+                            stage,
+                            data.len()
+                        )
+                    })?;
                 }
                 log(&format!(
                     "sent {:?} {name}: {}",
