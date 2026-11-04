@@ -1,0 +1,11 @@
+# Options for the e-Paper demo, read by /etc/init.d/S99epaper.
+#
+#   --v2       SSD1675-class panel, the default
+#   --v1       UC8151-class panel, the older 2.7inch HAT
+#   --bitbang  drive SPI from GPIO rather than /dev/spidev1.0, for a boot.img
+#              whose device tree has not been patched
+#   --once     draw one frame and exit
+#
+# The demo tries the other revision by itself if the panel does not answer,
+# so this is only needed to skip that first attempt.
+ARGS=""

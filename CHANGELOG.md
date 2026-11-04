@@ -2,6 +2,15 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.14.0 · 2026-11-05
+
+- `template/boot/` takes `boot.img` apart, edits the device tree and puts it back. Enabling a peripheral on this board needs no kernel rebuild: `CONFIG_SPI_ROCKCHIP`, `CONFIG_SPI_SPIDEV`, `CONFIG_GPIO_SYSFS` and `CONFIG_GPIO_CDEV` are all built in already, and the only thing stopping SPI is `status = "disabled"` in the device tree.
+- `boot.sh roundtrip` unpacks and repacks a container unchanged and checks it. The kernel and resource hashes must be identical; the device tree is compared as a tree, because `dtc` rewrites the header and a recompile is not byte-reproducible.
+- The FIT declares a signature but carries no value, so repacking with regenerated sha256 hashes is viable. Recorded with the evidence in `template/boot/README.md`.
+- `boot.sh enable-epaper-spi` routes SPI1 onto the pins a seated Raspberry Pi HAT drives, using the RK3506 RM_IO crossbar. The Lyra Zero W header is Pi pin-compatible, all twelve power and ground pins line up, but the SPI signals are not in the Pi positions. The RM mux numbers are the datasheet function indices plus 15, an undocumented offset measured against eight functions in the shipped device tree.
+- `template/rootfs/epaper/` is a 2.7inch e-Paper HAT demo that starts at boot from `/etc/init.d/S99epaper`. It supports both panel revisions, which use different controllers and opposite BUSY polarity, and falls back from one to the other if the panel does not answer.
+- The demo exits within seconds when no panel is attached, so a board with no HAT boots normally. `--bitbang` drives the same pins from userspace for an unpatched `boot.img`.
+
 ## 0.13.0 · 2026-11-05
 
 - `template/rootfs/cross/` cross-compiles for the board in Docker, without the SDK. `cross.sh cc`, `c++` and `make` pass the target ABI flags; `check` confirms a binary will load on the board; `run` executes it under emulation against the image's own libraries.

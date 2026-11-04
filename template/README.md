@@ -82,6 +82,11 @@ the vendor loader in place, so the rule above still holds: the container is
 built from the vendor image, and the SDK only supplies the partitions you
 chose to rebuild. See [sdk/README.md](sdk/README.md).
 
+Turning on a peripheral the board does not enable by default, such as SPI for
+a HAT, is a device tree change inside `boot.img`. `boot/boot.sh` does that in
+Docker without the SDK, because every driver is already built into the vendor
+kernel. See [boot/README.md](boot/README.md).
+
 [../docs/linux.md](../docs/linux.md) compares all three routes.
 
 ## Partition sizes

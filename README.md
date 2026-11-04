@@ -169,6 +169,24 @@ Both setups keep their work in a Docker volume rather than a directory. For
 the SDK that is forced: it checks the filesystem type of its own source tree
 and refuses anything that is not ext4.
 
+## Turning on a peripheral
+
+Every driver is built into the vendor kernel, so enabling SPI, I2C, PWM or a
+UART is a device tree change inside `boot.img`, not a kernel rebuild.
+`template/boot/` does that in Docker:
+
+```sh
+cd template/boot
+./boot.sh roundtrip /path/to/boot.img    # prove the repack is faithful
+./boot.sh unpack    /path/to/boot.img
+./boot.sh enable-epaper-spi              # route SPI1 to a seated Pi HAT
+./boot.sh pack      ../images/boot.img
+```
+
+`template/rootfs/epaper/` is a worked example: a Waveshare 2.7inch e-Paper
+HAT demo that starts at boot. The HAT seats on the Lyra header directly, with
+SPI1 routed to its pins through the RK3506 RM_IO matrix.
+
 ## Building
 
 ```sh
@@ -200,8 +218,10 @@ app/                wasm crate
   app.rs  dom.rs      state, event wiring, DOM helpers
 www/                static site, the Pages artifact
 template/           pack an update.img from loose files
+  boot/               edit the device tree inside boot.img
   rootfs/             unpack and repack the UBI root filesystem
     cross/              cross-compile for the board, and check the ABI
+    epaper/             2.7inch e-Paper HAT demo, starts at boot
   sdk/                build the Luckfox SDK in Docker
 docs/protocol.md    reverse-engineering notes
 docs/linux.md       changing the Linux environment on the board

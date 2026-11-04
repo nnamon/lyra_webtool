@@ -167,6 +167,29 @@ exit
 ./sdk.sh build rootfs
 ```
 
+## Changing what the board exposes: boot.img
+
+Every driver is built into the vendor kernel, so turning on SPI, I2C, PWM or a
+UART needs no kernel rebuild. It needs one `status` change in the device tree
+inside `boot.img`. `template/boot/` does that in Docker, and verifies the
+container roundtrips before it writes anything.
+
+```sh
+cd template/boot
+./boot.sh roundtrip /path/to/boot.img    # prove pack is faithful first
+./boot.sh unpack    /path/to/boot.img
+./boot.sh enable-epaper-spi
+./boot.sh pack      ../images/boot.img
+```
+
+25 of the 60 nodes in the shipped device tree are disabled, including both
+SPI controllers, five of six UARTs, all ten PWMs, both CAN and both Ethernet.
+That is the Rockchip convention, not a fault: the SoC `.dtsi` disables
+everything and each board's `.dts` enables what it wires.
+
+See [../template/boot/README.md](../template/boot/README.md), which also
+covers the FIT signature question and the RM_IO pin matrix.
+
 ## WiFi on the Zero W
 
 `wlan0` comes up `NO-CARRIER` until it associates. The onboard antenna needs
