@@ -2,6 +2,10 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.9.1 · 2026-11-04
+
+- Reads a reply a whole packet at a time and trims it, rather than asking for exactly the expected length. A device that answers with more would otherwise leave bytes behind and corrupt the next command.
+
 ## 0.9.0 · 2026-11-04
 
 - Fixes the status command, which had never worked. It asked for a data phase the device does not send, so it consumed the status reply as data and always failed. Mode detection depended on it, so every board was reported as MaskROM.

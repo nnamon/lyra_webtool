@@ -326,7 +326,18 @@ impl<T: Transport> Device<T> {
         let len = cbw.transfer_len as usize;
         if len > 0 {
             match opcode.direction() {
-                Direction::In => data = self.transport.bulk_in(len).await?,
+                Direction::In => {
+                    // Read into a whole number of packets and let the device's
+                    // short packet end the transfer, as the vendor tool does
+                    // (it uses a 501-byte buffer for an 11-byte reply). Asking
+                    // for exactly the declared length would leave any extra
+                    // bytes in the pipe to corrupt the next command.
+                    let want = len.next_multiple_of(SECTOR_SIZE.min(512));
+                    data = self.transport.bulk_in(want).await?;
+                    if data.len() > len {
+                        data.truncate(len);
+                    }
+                }
                 Direction::Out => {
                     let payload = payload.ok_or_else(|| {
                         Error::InvalidArgument(format!(
@@ -1053,6 +1064,25 @@ mod tests {
             u32::from_le_bytes([cbw[8], cbw[9], cbw[10], cbw[11]]),
             0,
             "no bytes may be requested"
+        );
+    }
+
+    /// The data phase is read a packet at a time, then trimmed to the length
+    /// the command declared.
+    #[test]
+    fn in_data_phase_reads_whole_packets_and_trims() {
+        let mut d = dev();
+        // A device that answers an 11-byte request with a full packet.
+        d.transport_mut().push_read(vec![0xcd; 512]);
+        d.transport_mut().push_ok_csw();
+        let info = block_on(d.read_flash_info());
+        assert!(info.is_ok(), "a long reply must not break the command");
+
+        let cbw = &d.transport_mut().writes[0];
+        assert_eq!(
+            u32::from_le_bytes([cbw[8], cbw[9], cbw[10], cbw[11]]),
+            11,
+            "the wrapper still declares the real length"
         );
     }
 
