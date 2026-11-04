@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.8.0 · 2026-11-04
+
+- Mode is decided by asking the board, not by reading its USB descriptor. A Loader answers a status command and MaskROM does not, so the answer is definitive.
+- Fixes a board in Loader mode being reported as MaskROM. That disabled every write control, and Download boot then sent a MaskROM-only request the Loader rejected with a transfer error.
+- Connecting logs the probe result alongside what the descriptor suggested.
+
 ## 0.7.0 · 2026-11-04
 
 - Quick flash is the first tab. Choose an `update.img`, read the checks, confirm, and it writes. It is the whole flashing path in one screen.

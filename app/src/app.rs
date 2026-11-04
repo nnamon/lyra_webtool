@@ -347,27 +347,40 @@ fn wire_connection(ctx: &Ctx) {
             let serial = transport
                 .serial_number()
                 .unwrap_or_else(|| "Not reported".into());
-            let detected = DeviceMode::from_bcd_usb(usb_ver);
+            let guessed = DeviceMode::from_bcd_usb(usb_ver);
+            log(&format!("USB layout: {}", transport.describe()));
+
+            // Ask the device rather than trust the descriptor. A Loader
+            // answers TestUnitReady; MaskROM only takes 471/472.
+            let mut device = Device::new(transport, guessed);
+            let probed = device.probe_mode().await;
+            log(&format!(
+                "mode probe: {} answered TestUnitReady = {}, bcdUSB {usb_ver:#06x} suggested {}",
+                probed.as_str(),
+                probed == DeviceMode::Loader,
+                guessed.as_str()
+            ));
+
             let mode = match value("sel-mode").as_str() {
                 "loader" => DeviceMode::Loader,
                 "maskrom" => DeviceMode::Maskrom,
-                _ => detected,
+                _ => probed,
             };
-            log(&format!("USB layout: {}", transport.describe()));
-            if mode != detected {
+            if mode != probed {
                 log_warn(&format!(
-                    "detected {} from bcdUSB {usb_ver:#06x}, overridden to {}",
-                    detected.as_str(),
+                    "probe said {}, overridden to {}",
+                    probed.as_str(),
                     mode.as_str()
                 ));
             }
+            device.set_mode(mode);
 
             set_text("dev-mode", mode.as_str());
             set_text("dev-vidpid", &format!("{vid:04x}:{pid:04x}"));
             set_text("dev-product", &product);
             set_text("dev-serial", &serial);
 
-            *ctx.dev.borrow_mut() = Some(Device::new(transport, mode));
+            *ctx.dev.borrow_mut() = Some(device);
             if mode == DeviceMode::Maskrom {
                 log_warn(
                     "MaskROM answers only the 471/472 bootstrap. \

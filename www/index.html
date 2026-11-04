@@ -101,8 +101,8 @@
         </label>
       </div>
       <p class="note">
-        Mode is detected from the USB descriptor. If the board is in Loader but reads as
-        MaskROM, the write controls stay disabled; override it here.
+        Mode comes from asking the board, not from its USB descriptor: a Loader answers a
+        status command and MaskROM does not. Override it here if the answer looks wrong.
       </p>
       <dl class="rows">
         <div><dt>Mode</dt><dd id="dev-mode">Not connected</dd></div>

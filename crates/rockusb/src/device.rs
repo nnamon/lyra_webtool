@@ -77,10 +77,18 @@ pub enum DeviceMode {
 }
 
 impl DeviceMode {
-    /// MaskROM advertises `bcdUSB` 0x0201 on Rockchip parts; Loader reports
-    /// something else. `CRKScan` distinguishes the two this way.
+    /// Guess the mode from `bcdUSB`.
+    ///
+    /// This is a fallback only. `upgrade_tool` v2.17 contains no `bcdUSB`
+    /// comparison at all, so there is no authority for it in the vendor
+    /// binary, and an earlier version of this function had the sense
+    /// inverted: it called a real Loader "Maskrom", which disabled every write
+    /// control and made the tool send a MaskROM-only request that the Loader
+    /// stalled.
+    ///
+    /// Prefer [`Device::probe_mode`], which asks the device instead.
     pub fn from_bcd_usb(bcd_usb: u16) -> Self {
-        if bcd_usb == 0x0201 {
+        if bcd_usb == 0x0200 {
             Self::Maskrom
         } else {
             Self::Loader
@@ -357,6 +365,24 @@ impl<T: Transport> Device<T> {
     /// True when the device answers `TestUnitReady` without error.
     pub async fn is_ready(&mut self) -> bool {
         self.test_unit_ready().await.is_ok()
+    }
+
+    /// Ask the device which mode it is in, and record the answer.
+    ///
+    /// A Loader implements the bulk command set, so it answers
+    /// `TestUnitReady`. MaskROM accepts only the 471/472 control transfers and
+    /// does not, which makes this a direct test rather than a guess at the
+    /// descriptor. A failed probe may leave an endpoint halted, so the halt is
+    /// cleared before returning.
+    pub async fn probe_mode(&mut self) -> DeviceMode {
+        let mode = if self.test_unit_ready().await.is_ok() {
+            DeviceMode::Loader
+        } else {
+            let _ = self.transport.clear_halt().await;
+            DeviceMode::Maskrom
+        };
+        self.mode = mode;
+        mode
     }
 
     // ---- identification -------------------------------------------------
@@ -969,6 +995,30 @@ mod tests {
             vec![4096, 1],
             "full packet, then a 1-byte terminator"
         );
+    }
+
+    #[test]
+    fn probe_reports_loader_when_the_device_answers() {
+        let mut d = Device::new(FakeTransport::new(), DeviceMode::Maskrom);
+        d.transport_mut().push_read(vec![0u8; 6]);
+        d.transport_mut().push_ok_csw();
+        assert_eq!(block_on(d.probe_mode()), DeviceMode::Loader);
+        assert_eq!(d.mode(), DeviceMode::Loader, "probe records what it found");
+    }
+
+    #[test]
+    fn probe_reports_maskrom_when_the_device_does_not() {
+        let mut d = Device::new(FakeTransport::new(), DeviceMode::Loader);
+        // No reply queued: the fake errors, as MaskROM does for a bulk command.
+        assert_eq!(block_on(d.probe_mode()), DeviceMode::Maskrom);
+        assert_eq!(d.mode(), DeviceMode::Maskrom);
+    }
+
+    /// Guards the inversion that shipped in 0.4.0.
+    #[test]
+    fn bcd_usb_0x201_is_a_loader() {
+        assert_eq!(DeviceMode::from_bcd_usb(0x0201), DeviceMode::Loader);
+        assert_eq!(DeviceMode::from_bcd_usb(0x0200), DeviceMode::Maskrom);
     }
 
     #[test]
