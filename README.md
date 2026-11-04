@@ -138,6 +138,20 @@ cd template/rootfs
 ./ubifs.sh pack      new-rootfs.img
 ```
 
+To add a package, change the kernel, or change the device tree, build from the
+Luckfox SDK. `template/sdk/` runs that in Docker too:
+
+```sh
+cd template/sdk
+./sdk.sh init ~/Downloads/Luckfox_Lyra_SDK_250815.tar.gz
+./sdk.sh build rootfs
+./sdk.sh fetch
+```
+
+Both setups keep their work in a Docker volume rather than a directory. For
+the SDK that is forced: it checks the filesystem type of its own source tree
+and refuses anything that is not ext4.
+
 ## Building
 
 ```sh
@@ -170,6 +184,7 @@ app/                wasm crate
 www/                static site, the Pages artifact
 template/           pack an update.img from loose files
   rootfs/             unpack and repack the UBI root filesystem
+  sdk/                build the Luckfox SDK in Docker
 docs/protocol.md    reverse-engineering notes
 docs/linux.md       changing the Linux environment on the board
 ```

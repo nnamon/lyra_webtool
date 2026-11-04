@@ -17,4 +17,6 @@ This directory is not tracked by git, because these files are large and
 vendor-supplied.
 
 To change what is inside `rootfs.img` rather than swap the whole file, see
-[../rootfs/README.md](../rootfs/README.md).
+[../rootfs/README.md](../rootfs/README.md). To build these images from source,
+see [../sdk/README.md](../sdk/README.md); `../sdk/sdk.sh fetch` writes them
+straight into this directory.

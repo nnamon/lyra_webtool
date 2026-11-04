@@ -2,6 +2,14 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.12.0 · 2026-11-04
+
+- `template/sdk/` builds the Luckfox Lyra SDK in Docker, so adding a package or changing the kernel or device tree needs no Linux machine. `sdk.sh init` extracts the SDK and selects the Zero W SPI NAND config by name; `sdk.sh build <target>`, `fetch`, `get`, `put` and `shell` do the rest.
+- The SDK source has to live in a Docker volume. Its own `check-sdk.sh` reads the filesystem type of its source tree and accepts only ext4, f2fs or btrfs. A directory bind-mounted from macOS reports `virtiofs` and is refused.
+- The container is amd64 and cannot be anything else, because the SDK ships prebuilt x86_64 host tools and Buildroot needs a host compiler that can produce 32-bit binaries.
+- `sdk.sh fetch` writes the built images into `template/images/`, where `template/build.sh` already expects them.
+- The SDK's own preflight scripts, `check-sdk.sh` and `check-buildroot.sh`, both pass inside the container. A full build is not yet verified; it needs the SDK tarball and hours of emulated compilation.
+
 ## 0.11.0 · 2026-11-04
 
 - `docs/linux.md` explains how to change the Linux environment on the board, by three routes: editing the running board, rebuilding `rootfs.img` offline, and rebuilding from the Luckfox SDK.

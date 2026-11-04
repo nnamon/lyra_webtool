@@ -7,7 +7,9 @@ and in what they can reach.
 | --- | --- | --- |
 | Edit on the running board | Config files, scripts, startup | Seconds, no host setup |
 | Rebuild `rootfs.img` offline | Everything in the root filesystem | Minutes, needs Docker |
-| Rebuild from the SDK | Packages, kernel, device tree, U-Boot | Hours, needs Linux x86_64 and a 2 GB download |
+| Rebuild from the SDK | Packages, kernel, device tree, U-Boot | Hours, needs Docker and a 2 GB download |
+
+Routes 2 and 3 both run in Docker, so none of this needs a Linux machine.
 
 The board runs Buildroot, so there is no package manager. `apt` and `opkg` do
 not exist, and nothing can be installed at run time. That is why the third
@@ -70,36 +72,42 @@ elsewhere. It cannot add packages, and it cannot change the kernel itself.
 This is the only route that adds packages, changes the kernel config, or
 changes the device tree.
 
-The SDK needs Ubuntu 22.04 on x86_64. On macOS that means a Linux VM or a
-Docker container with `--platform linux/amd64`, and a Buildroot build under
-emulation is slow.
+`template/sdk/` runs it in Docker. `template/sdk/README.md` has the setup, the
+disk and time budget, and the two constraints that decide the design: the SDK
+must sit on an ext4 filesystem, so the source lives in a Docker volume, and
+the container must be amd64, because the SDK ships x86_64 host tools.
 
-1. Download `Luckfox_Lyra_SDK_<date>.tar.gz` from Luckfox's Google Drive:
-   <https://drive.google.com/drive/folders/1l2ixhfw53J3eZunyvHMnw2DYViH9d8Cx>
-2. Extract it and pick the board:
-   ```sh
-   ./build.sh lunch
-   ```
-   Choose `[4] RK3506B_Luckfox_Lyra_Zero_W`, then `[1] SPI_NAND`, then
-   `[0] Buildroot`. That selects
-   `device/rockchip/.chips/rk3506/luckfox_lyra_zero-w_buildroot_spinand_defconfig`,
-   whose `parameter-lyra-spinand.txt` is byte for byte the `parameter.txt` in
-   `template/`.
-3. Build what you changed:
+```sh
+cd template/sdk
+./sdk.sh init ~/Downloads/Luckfox_Lyra_SDK_250815.tar.gz
+./sdk.sh build
+./sdk.sh fetch
+```
 
-   | Command | Output | Use it for |
-   | --- | --- | --- |
-   | `./build.sh buildroot-config` | updates the defconfig | Adding or removing packages |
-   | `./build.sh rootfs` | `rockdev/rootfs.img` | Any root filesystem change |
-   | `./build.sh kernel-config` | updates the kernel defconfig | Drivers, kernel options |
-   | `./build.sh kernel` | `rockdev/boot.img` | Kernel or device tree changes |
-   | `./build.sh uboot` | `rockdev/uboot.img`, `rockdev/MiniLoaderAll.bin` | Boot changes |
-   | `./build.sh firmware` | packs `rockdev/` | Producing a full set |
-   | `./build.sh` | everything | A first build |
+`init` selects
+`device/rockchip/.chips/rk3506/luckfox_lyra_zero-w_buildroot_spinand_defconfig`,
+the Zero W on SPI NAND with Buildroot. Its `parameter-lyra-spinand.txt` is
+byte for byte the `parameter.txt` in `template/`, which is how we know this is
+the config that built the firmware on your board.
 
-4. Flash the result. Either write a single partition image with the web tool's
-   Flash tab, or copy the files into `template/images/` and run
-   `template/build.sh` to pack an `update.img`.
+Get the SDK tarball from Luckfox's Google Drive:
+<https://drive.google.com/drive/folders/1l2ixhfw53J3eZunyvHMnw2DYViH9d8Cx>
+
+The targets, which `./sdk.sh build <target>` passes straight through:
+
+| Target | Output | Use it for |
+| --- | --- | --- |
+| `buildroot-config` | updates the Buildroot defconfig | Adding or removing packages |
+| `rootfs` | `rockdev/rootfs.img` | Any root filesystem change |
+| `kernel-config` | updates the kernel defconfig | Drivers, kernel options |
+| `kernel` | `rockdev/boot.img` | Kernel or device tree changes |
+| `uboot` | `rockdev/uboot.img`, `rockdev/MiniLoaderAll.bin` | Boot changes |
+| `firmware` | packs `rockdev/` | Producing a full set |
+| no target | everything | A first build |
+
+`./sdk.sh fetch` copies `rockdev/` into `template/images/`, where
+`template/build.sh` expects it. From there, write a single partition image
+with the web tool's Flash tab, or pack a whole `update.img`.
 
 ### Where the config lives
 
@@ -126,8 +134,10 @@ Buildroot skips a package whose build directory already exists. Delete it and
 build again:
 
 ```sh
+./sdk.sh shell
 rm -rf buildroot/output/rockchip_rk3506_luckfox/build/<package>-*
-./build.sh rootfs
+exit
+./sdk.sh build rootfs
 ```
 
 ## WiFi on the Zero W

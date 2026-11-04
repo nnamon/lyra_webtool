@@ -72,9 +72,13 @@ Run this on your own `update.img` before you rely on a built image.
 Replacing `rootfs.img` with a different vendor build is one thing. Changing
 what is inside it is another, and `rootfs.img` is a UBI image with no loop
 mount. `rootfs/ubifs.sh` unpacks and repacks it in Docker. See
-[rootfs/README.md](rootfs/README.md), and
-[../docs/linux.md](../docs/linux.md) for the other two ways to change the
-Linux environment.
+[rootfs/README.md](rootfs/README.md).
+
+Adding a package, or changing the kernel or device tree, means building from
+the Luckfox SDK. `sdk/sdk.sh` runs that in Docker and drops the results into
+`images/`. See [sdk/README.md](sdk/README.md).
+
+[../docs/linux.md](../docs/linux.md) compares all three routes.
 
 ## Partition sizes
 
