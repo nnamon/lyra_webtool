@@ -67,6 +67,15 @@ cargo run -p rockusb --bin rkimage -- roundtrip /path/to/update.img
 so anything it builds differs from the vendor's only where you changed it.
 Run this on your own `update.img` before you rely on a built image.
 
+## Changing the root filesystem
+
+Replacing `rootfs.img` with a different vendor build is one thing. Changing
+what is inside it is another, and `rootfs.img` is a UBI image with no loop
+mount. `rootfs/ubifs.sh` unpacks and repacks it in Docker. See
+[rootfs/README.md](rootfs/README.md), and
+[../docs/linux.md](../docs/linux.md) for the other two ways to change the
+Linux environment.
+
 ## Partition sizes
 
 The `mtdparts` line in `parameter.txt` is the authority:

@@ -2,6 +2,14 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.11.0 · 2026-11-04
+
+- `docs/linux.md` explains how to change the Linux environment on the board, by three routes: editing the running board, rebuilding `rootfs.img` offline, and rebuilding from the Luckfox SDK.
+- `template/rootfs/ubifs.sh` unpacks and repacks `rootfs.img`. It is a UBI image holding a UBIFS filesystem, so no loop mount exists for it and the vendor geometry has to be reproduced exactly.
+- The UBI geometry is read out of the Luckfox SDK rather than guessed, and `ubifs.sh info` prints what your own image actually uses so you can check it.
+- `ubifs.sh roundtrip` compares the unpacked and repacked trees including modes, owners, link counts and device numbers. Extraction silently drops all of those unless it runs as root with the right flags, which produces an image that flashes and then fails to boot.
+- Kernel modules live in `rootfs.img` under `/lib/modules`, not in `boot.img`, so a new module needs both images rebuilt.
+
 ## 0.10.0 · 2026-11-04
 
 - `rkimage`, a command-line tool, unpacks and packs `update.img` files. It runs on your machine and is not part of the web page.

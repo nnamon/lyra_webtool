@@ -118,6 +118,26 @@ cargo run -p rockusb --bin rkimage -- roundtrip update.img
 the packer reproduces a vendor image exactly before relying on it. See
 [template/README.md](template/README.md).
 
+## Changing what runs on the board
+
+Packing an `update.img` only rearranges partition images. To change the Linux
+environment itself, read [docs/linux.md](docs/linux.md), which covers three
+routes: editing the running board, rebuilding `rootfs.img` offline, and
+rebuilding from the Luckfox SDK.
+
+`rootfs.img` is a UBI image holding a UBIFS filesystem, so it has no loop
+mount. `template/rootfs/ubifs.sh` unpacks and repacks it in Docker, with the
+geometry read out of the SDK:
+
+```sh
+cd template/rootfs
+./ubifs.sh info      /path/to/rootfs.img   # geometry the vendor used
+./ubifs.sh roundtrip /path/to/rootfs.img   # check nothing is lost
+./ubifs.sh unpack    /path/to/rootfs.img
+./ubifs.sh shell                           # edit the tree as root
+./ubifs.sh pack      new-rootfs.img
+```
+
 ## Building
 
 ```sh
@@ -149,7 +169,9 @@ app/                wasm crate
   app.rs  dom.rs      state, event wiring, DOM helpers
 www/                static site, the Pages artifact
 template/           pack an update.img from loose files
+  rootfs/             unpack and repack the UBI root filesystem
 docs/protocol.md    reverse-engineering notes
+docs/linux.md       changing the Linux environment on the board
 ```
 
 `rockusb` has no browser dependency, so it tests natively:

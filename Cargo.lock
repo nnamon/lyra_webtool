@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "lyra-webtool"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "console_error_panic_hook",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "rockusb"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "futures",
