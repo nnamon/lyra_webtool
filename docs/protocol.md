@@ -10,8 +10,8 @@ sha256  8017ce9480eafecaef1771e7d46d505868cf207ec076cd86db21ccae2a86d298
 ```
 
 Addresses below refer to that binary. Where a value is widely published but
-differs from what this binary actually contains, that is called out — those are
-the ones worth distrusting.
+differs from what this binary actually contains, that is called out. Distrust
+those.
 
 ## Transport
 
@@ -103,7 +103,7 @@ It range-checks the request with `leal -0x471(%rsi); cmpl $1; ja`, so only
 
 | field | value |
 |---|---|
-| `bmRequestType` | `0x40` — host to device, vendor, device |
+| `bmRequestType` | `0x40` (host to device, vendor, device) |
 | `bRequest` | `0x0c` |
 | `wValue` | `0` |
 | `wIndex` | `0x471` or `0x472` |
@@ -121,15 +121,15 @@ Two length quirks, both about USB short-packet termination:
 
 ## Checksums
 
-### CRC-16/CCITT — `CRC_CCITT` at `0x427180`
+### CRC-16/CCITT, `CRC_CCITT` at `0x427180`
 
-Init `0xFFFF`, polynomial `0x1021`, MSB first, no reflection, no final XOR —
-i.e. CRC-16/CCITT-FALSE. The loop conditionally XORs the polynomial twice per
+Init `0xFFFF`, polynomial `0x1021`, MSB first, no reflection, no final XOR.
+That is CRC-16/CCITT-FALSE. The loop conditionally XORs the polynomial twice per
 bit, once on the previous CRC's bit 15 and once on the input bit; two XORs of
 the same value cancel, so it reduces to the usual `msb ^ input_bit` test. An
 empty buffer returns the init value.
 
-### Rockchip CRC32 — `CRC_32` at `0x426d60`, table `gTable_Crc32` at `0x69e180`
+### Rockchip CRC32, `CRC_32` at `0x426d60`, table `gTable_Crc32` at `0x69e180`
 
 Polynomial **`0x04C10DB7`**, MSB first, init `0`, no final inversion.
 
@@ -141,7 +141,7 @@ for byte, and `rk356x_spl_loader_ddr1056_v1.10.111.bin` validates against it
 The binary also carries an ordinary zlib table (`crc32table_le` at `0x69e620`)
 for UBI and sparse images.
 
-## RC4 — `P_RC4` at `0x426ee0`
+## RC4, `P_RC4` at `0x426ee0`
 
 Textbook RC4: identity state, `K[i] = key[i % 16]`, standard KSA swap and PRGA.
 The key is loaded with one `movdqa` from `0x61d4c0`:
@@ -155,7 +155,7 @@ that value does not match this binary, and a wrong final key byte changes the
 entire keystream after the key schedule.
 
 `CRKAndroidDevice::IDBRC4` at `0x436e40` applies it to three 512-byte regions of
-the IDBlock — offsets `0x000`, `0x400` and `0x600`, i.e. sectors 0, 2 and 3.
+the IDBlock: offsets `0x000`, `0x400` and `0x600`, which are sectors 0, 2 and 3.
 Sector 1 is deliberately left in the clear.
 
 ## `RKBOOT` loader container
@@ -224,19 +224,19 @@ The last 32 bytes of the file are a lowercase-hex MD5 covering
 
 ### A caveat on the inner `RKAF` table
 
-`upgrade_tool` v2.17 contains **no `RKAF` tag comparison at all** — searching
-the disassembly for `0x46414b52` finds nothing, and the item table is reached
-through `CRKImage::GetData` without a magic check. So unlike everything above,
-the inner item layout in this project follows the public `rkdeveloptool`
-`RKANDROID_HDR` definition rather than a disassembly of this binary, and it has
-not been checked against a real `update.img`.
+`upgrade_tool` v2.17 contains **no `RKAF` tag comparison at all**. Searching the
+disassembly for `0x46414b52` finds nothing. The item table is reached through
+`CRKImage::GetData` without a magic check. Unlike everything above, the inner
+item layout in this project follows the public `rkdeveloptool` `RKANDROID_HDR`
+definition rather than a disassembly of this binary. It has not been checked
+against a real `update.img`.
 
 Because a wrong offset there would mean writing a payload to the wrong flash
 address, `RkafFirmware::parse` validates hard: it requires the tag, rejects an
 implausible item count, and rejects any item whose payload falls outside the
 container. A layout mismatch produces an error rather than a bad write.
 
-## Command-line surface (for reference)
+## Command-line surface
 
 The tool's own usage text, recovered from `.rodata` at `0x2166ea`:
 

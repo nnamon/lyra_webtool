@@ -309,8 +309,12 @@ fn wire_connection(ctx: &Ctx) {
             let vid = transport.vendor_id();
             let pid = transport.product_id();
             let usb_ver = transport.usb_version();
-            let product = transport.product_name().unwrap_or_else(|| "—".into());
-            let serial = transport.serial_number().unwrap_or_else(|| "—".into());
+            let product = transport
+                .product_name()
+                .unwrap_or_else(|| "Not reported".into());
+            let serial = transport
+                .serial_number()
+                .unwrap_or_else(|| "Not reported".into());
             let mode = DeviceMode::from_bcd_usb(usb_ver);
 
             set_text("dev-mode", mode.as_str());
@@ -335,7 +339,7 @@ fn wire_connection(ctx: &Ctx) {
                 let _ = dev.into_transport().close().await;
             }
             for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
-                set_text(id, "—");
+                set_text(id, "Not connected");
             }
             let _ = c2;
             Ok("disconnected".into())
@@ -465,7 +469,7 @@ fn wire_resets(ctx: &Ctx) {
                     let _ = dev.into_transport().close().await;
                 }
                 for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
-                    set_text(id, "—");
+                    set_text(id, "Not connected");
                 }
                 log_warn("device left the bus; reconnect to continue");
                 Ok(format!("{name} sent"))
@@ -1174,7 +1178,7 @@ fn render_item_table(fw: &rockusb::image::RkafFirmware) {
                 item.target_byte_offset()
             )
         } else {
-            "— not written —".to_string()
+            "Not written".to_string()
         };
         rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td>\
