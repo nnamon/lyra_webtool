@@ -2,6 +2,11 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.15.1 · 2026-11-05
+
+- Corrected the provenance of `kernel-config`. The SDK README said it was not on a vendor page and rested on a forum report; Luckfox's own Lyra kernel configuration page gives it, as the Buildroot page gives `buildroot-config`. Both are now cited.
+- Noted the Buildroot caching behaviour the vendor FAQ describes: dependency checks are cached after the first build and not rechecked, which is why a newly enabled package needs its build directory deleted.
+
 ## 0.15.0 · 2026-11-05
 
 - Removed `template/boot/`. Repacking the `boot.img` FIT by hand produced an image that does not boot, and keeping a tool that fails is worse than not having one. Changing the device tree is the SDK's job: `template/sdk/sdk.sh build kernel` packs the FIT the way the vendor's was.

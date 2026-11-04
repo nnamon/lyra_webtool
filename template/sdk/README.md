@@ -79,6 +79,7 @@ takes minutes rather than hours.
 | Goal | Commands |
 | --- | --- |
 | Add or remove a package | `./sdk.sh build buildroot-config`, then `./sdk.sh build rootfs` |
+| A package that will not appear | delete its build directory first, as below. Buildroot caches its dependency checks after the first build and does not recheck |
 | Change a kernel option | `./sdk.sh build kernel-config`, then `./sdk.sh build kernel` |
 | Edit the device tree | `./sdk.sh get kernel-6.1/arch/arm/boot/dts/rk3506b-luckfox-lyra-zero-w.dts`, edit, `./sdk.sh put rk3506b-luckfox-lyra-zero-w.dts kernel-6.1/arch/arm/boot/dts/`, then `./sdk.sh build kernel` |
 | Enable SPI, I2C, PWM or a UART | the same, and note the board shares `rk3506-luckfox-lyra-ultra.dtsi` with the Ultra and Pi. Build it here rather than repacking `boot.img` by hand: `../boot/` produced an image that does not boot |
@@ -87,10 +88,11 @@ takes minutes rather than hours.
 `buildroot-config` and `kernel-config` open menuconfig and save the result
 back into the defconfig, so a later clean build keeps your choice.
 
-`buildroot-config` is the name the vendor Buildroot page gives. `kernel-config`
-is not on a vendor page; it matches the hyphenated pattern and a Lyra user
-reports it working, so check `./build.sh help` in your own tree if it is
-rejected.
+Both names come from Luckfox's own Lyra pages:
+[Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration)
+and [Kernel configuration](https://wiki.luckfox.com/Luckfox-Lyra/Kernel-Configuration).
+Take the Lyra pages, not the Pico ones: the Pico Pro Max page spells the
+Buildroot target `buildrootconfig`, which this SDK does not accept.
 
 Kernel modules install into `rootfs.img` under `/lib/modules`, not into
 `boot.img`. A driver built as a module therefore needs `./sdk.sh build kernel`
