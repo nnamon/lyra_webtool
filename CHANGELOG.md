@@ -2,6 +2,15 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.13.0 · 2026-11-05
+
+- `template/rootfs/cross/` cross-compiles for the board in Docker, without the SDK. `cross.sh cc`, `c++` and `make` pass the target ABI flags; `check` confirms a binary will load on the board; `run` executes it under emulation against the image's own libraries.
+- The target ABI is measured from the board's own `busybox`, not assumed: ARMv7-A, hard float, VFPv4, ELF flags `0x5000400`, glibc 2.38, interpreter `/lib/ld-linux-armhf.so.3`.
+- glibc is backward compatible only. A binary needing `GLIBC_2.39` loads on the board and then dies, and nothing warns you at build time unless the toolchain's glibc is old enough to lack the symbol. The container is Debian bookworm, whose armhf target is glibc 2.36, so such a call fails at link time instead.
+- `check` reads the header and says nothing about dependencies; `run` loads the binary for real and names a missing library. Both are needed and the README says why.
+- `ubifs.sh` is now verified against a real vendor `rootfs.img`: roundtrip reports 7263 entries identical, and the repacked image is the same size as the original.
+- A repacked image is not byte-identical to its source, because `ubinize` writes a random image sequence number at offset `0x18`. Documented, so a `cmp` difference at byte 25 is not mistaken for data loss.
+
 ## 0.12.1 · 2026-11-05
 
 - `sdk.sh init` now checks the working tree out of `.repo` before it looks for `build.sh`. The Luckfox Lyra tarball ships a `repo` mirror and no source tree, which is the layout the vendor page documents, and 0.12.0 gave up with "no build.sh in the tarball" before it ever ran `repo sync`.

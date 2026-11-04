@@ -46,16 +46,22 @@ with `cat /proc/mounts` before relying on it; look for `ubi0:rootfs` mounted
 4. Reboot to check it survives.
 
 This route cannot add a program that is not already installed. Cross-compile
-instead, with the toolchain from the SDK:
+instead. `template/rootfs/cross/` does that in Docker without the SDK:
 
 ```sh
-arm-none-linux-gnueabihf-gcc hello.c -o hello
+cd template/rootfs/cross
+./cross.sh cc -O2 hello.c -o hello     # armv7-a, hard float, VFPv4
+./cross.sh check hello                 # will it load on the board
 scp hello root@192.168.123.100:/root
 ```
 
-The toolchain lives at
-`prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/bin`
-inside the SDK.
+The board runs glibc 2.38, and a binary needing a newer symbol version loads
+and then dies. `check` catches that, along with a wrong architecture or
+interpreter. `template/rootfs/cross/README.md` has the target ABI and the
+glibc rule.
+
+If you have the SDK unpacked, its own toolchain works too, at
+`prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/bin`.
 
 ## Route 2: rebuild rootfs.img offline
 
@@ -65,7 +71,8 @@ commands and for why the tree has to live in a Docker volume.
 
 Use it to ship a set of config changes as a flashable image, or to prepare a
 board before it ever boots. It can also drop in a `.ko` module you built
-elsewhere. It cannot add packages, and it cannot change the kernel itself.
+elsewhere, or a program you cross-compiled with `template/rootfs/cross/`. It
+cannot add packages, and it cannot change the kernel itself.
 
 ## Route 3: rebuild from the SDK
 

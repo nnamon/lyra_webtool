@@ -138,6 +138,17 @@ cd template/rootfs
 ./ubifs.sh pack      new-rootfs.img
 ```
 
+To cross-compile a program for the board without the SDK, use
+`template/rootfs/cross/`. It targets armv7-a hard float and glibc 2.38, and
+`cross.sh check` refuses a binary the board cannot load.
+
+```sh
+cd template/rootfs/cross
+./cross.sh cc -O2 hello.c -o hello
+./cross.sh check hello
+./cross.sh run hello               # against the image's own libc, emulated
+```
+
 To add a package, change the kernel, or change the device tree, build from the
 Luckfox SDK. `template/sdk/` runs that in Docker too:
 
@@ -190,6 +201,7 @@ app/                wasm crate
 www/                static site, the Pages artifact
 template/           pack an update.img from loose files
   rootfs/             unpack and repack the UBI root filesystem
+    cross/              cross-compile for the board, and check the ABI
   sdk/                build the Luckfox SDK in Docker
 docs/protocol.md    reverse-engineering notes
 docs/linux.md       changing the Linux environment on the board

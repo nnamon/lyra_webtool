@@ -97,13 +97,20 @@ unlike `rkimage roundtrip` one level up.
 Run this on your own `rootfs.img` first. It is the only check that tells you
 the geometry above matches your firmware.
 
+A repacked image is not byte-identical to the one it came from, even with
+nothing changed. `ubinize` writes a random image sequence number into the UBI
+header at offset 0x18, so the files differ from byte 25 and are the same size.
+`roundtrip` compares the trees, which is the thing that matters.
+
 ## What this cannot do
 
 Buildroot has no package manager, so there is nothing to install into. New
 programs have to come from somewhere else:
 
-- Cross-compile one with the SDK toolchain and copy the binary in. Dynamically
-  linked programs also need their libraries.
+- Cross-compile one and copy the binary in. `cross/` does this without the
+  SDK, and checks the result will actually load on the board. See
+  [cross/README.md](cross/README.md). Dynamically linked programs also need
+  their libraries, which this image has no way to install for them.
 - Rebuild the whole root filesystem from the SDK with the package enabled. See
   `../../docs/linux.md`.
 
