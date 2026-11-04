@@ -2,6 +2,11 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.14.3 · 2026-11-05
+
+- The route for a device tree change is now the SDK, which packs and signs the FIT the way the vendor's was, rather than repacking `boot.img` by hand. Luckfox document the build on their SDK image compilation page and the files on their device tree page.
+- Named the shared include the docs were missing: the Zero W builds `rk3506b-luckfox-lyra-zero-w.dts`, which pulls in `rk3506-luckfox-lyra-ultra.dtsi`, shared with the Ultra, Ultra W and Pi. The `-sd` variant of that `.dts` is for SD boot, not SPI NAND.
+
 ## 0.14.2 · 2026-11-05
 
 - A `boot.img` repacked by `template/boot/` does not boot. Flashed to a Luckfox Lyra Zero W, the board hung and needed the vendor image reflashed to recover. The tooling and its documentation now say so at the top rather than describing a route that fails.

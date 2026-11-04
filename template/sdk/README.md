@@ -81,6 +81,7 @@ takes minutes rather than hours.
 | Add or remove a package | `./sdk.sh build buildroot-config`, then `./sdk.sh build rootfs` |
 | Change a kernel option | `./sdk.sh build kernel-config`, then `./sdk.sh build kernel` |
 | Edit the device tree | `./sdk.sh get kernel-6.1/arch/arm/boot/dts/rk3506b-luckfox-lyra-zero-w.dts`, edit, `./sdk.sh put rk3506b-luckfox-lyra-zero-w.dts kernel-6.1/arch/arm/boot/dts/`, then `./sdk.sh build kernel` |
+| Enable SPI, I2C, PWM or a UART | the same, and note the board shares `rk3506-luckfox-lyra-ultra.dtsi` with the Ultra and Pi. Build it here rather than repacking `boot.img` by hand: `../boot/` produced an image that does not boot |
 | Anything else | `./sdk.sh shell` |
 
 `buildroot-config` and `kernel-config` open menuconfig and save the result

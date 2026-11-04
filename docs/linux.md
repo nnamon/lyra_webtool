@@ -145,7 +145,8 @@ pack a whole `update.img`.
 | Buildroot packages | `buildroot/configs/rockchip_rk3506_luckfox_defconfig` |
 | Root filesystem type | `buildroot/configs/rockchip/fs/ubifs.config` |
 | Kernel config | `kernel-6.1/arch/arm/configs/rk3506_luckfox_defconfig` |
-| Device tree | `kernel-6.1/arch/arm/boot/dts/rk3506b-luckfox-lyra-zero-w.dts` |
+| Device tree, board | `kernel-6.1/arch/arm/boot/dts/rk3506b-luckfox-lyra-zero-w.dts` |
+| Device tree, shared | `kernel-6.1/arch/arm/boot/dts/rk3506-luckfox-lyra-ultra.dtsi` |
 
 ### Adding files without patching a package
 
@@ -173,10 +174,24 @@ Every driver is built into the vendor kernel, so turning on SPI, I2C, PWM or a
 UART needs no kernel rebuild in principle. It needs one `status` change in the
 device tree inside `boot.img`.
 
-**This does not work yet.** A container repacked by `template/boot/` was
-flashed to a board and did not boot. Before reaching for it, check whether you
-need it at all: pins that no enabled node claims are already usable as GPIO,
-and a userspace driver on those pins cannot break booting.
+**Do not repack `boot.img` by hand.** A container repacked by
+`template/boot/` was flashed to a board and did not boot. Build it from the
+SDK instead, which packs and signs the FIT the same way the vendor's was:
+
+```sh
+cd template/sdk
+./sdk.sh shell          # edit the DTS, then exit
+./sdk.sh build kernel   # produces rockdev/boot.img
+./sdk.sh fetch
+```
+
+The Zero W device tree is `rk3506b-luckfox-lyra-zero-w.dts`, which includes
+`rk3506-luckfox-lyra-ultra.dtsi`, shared with the Ultra, Ultra W and Pi. The
+`-sd` variant of that `.dts` is for SD boot, not SPI NAND.
+
+Before reaching for any of it, check whether you need it: a pin that no
+enabled node claims is already usable as GPIO, and a userspace driver on
+those pins cannot stop the board booting.
 
 ```sh
 cd template/boot
