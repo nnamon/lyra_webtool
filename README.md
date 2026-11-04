@@ -5,6 +5,8 @@ is Rust compiled to WebAssembly. It speaks Rockchip's rockusb protocol over
 WebUSB, and carries a separate UART console over Web Serial.
 
 Live at [nnamon.github.io/lyra_webtool](https://nnamon.github.io/lyra_webtool/).
+Changes are in [CHANGELOG.md](CHANGELOG.md), which Settings shows as Version
+history.
 
 This has never been run against a physical board. Read
 [Verification status](#verification-status) before you flash anything you
@@ -35,6 +37,7 @@ Every rockusb opcode that `upgrade_tool` implements is reachable from the UI.
 | Memory | Sector read and write, DRAM read, write and execute |
 | eFuse | Read and write, legacy (`0x1f`/`0x20`) and new (`0x23`/`0x24`) |
 | Console | Web Serial terminal, 9600 to 3000000 baud |
+| Settings | Running version and build, version history, reload and cache-clearing reload |
 
 Large images stream. The tool identifies a 400 MB `update.img` from its
 102-byte header, then flashes it in 256 KiB chunks read straight from the

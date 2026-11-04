@@ -40,6 +40,7 @@
   <button class="tab" data-tab="memory" role="tab">Memory</button>
   <button class="tab" data-tab="otp" role="tab">eFuse</button>
   <button class="tab" data-tab="console" role="tab">Console</button>
+  <button class="tab" data-tab="settings" role="tab">Settings</button>
 </nav>
 
 <main>
@@ -335,6 +336,32 @@
         <input type="text" id="serial-input" placeholder="Type a command, then Enter" class="mono" disabled>
         <button id="btn-serial-send" class="btn btn-tinted" disabled>Send</button>
       </div>
+    </section>
+  </div>
+</section>
+
+<!-- Settings -->
+<section id="panel-settings" class="panel">
+  <div class="grid">
+    <section class="card">
+      <h2>About</h2>
+      <dl class="rows">
+        <div><dt>Version</dt><dd id="about-version">Not read</dd></div>
+        <div><dt>Build</dt><dd id="about-build">Not read</dd></div>
+        <div><dt>Deployed</dt><dd id="about-deployed">Not checked</dd></div>
+      </dl>
+      <div id="update-notice" class="summary" hidden></div>
+      <div class="actions wrap">
+        <button id="btn-check-version" class="btn btn-tinted">Check for update</button>
+        <button id="btn-reload" class="btn">Reload app</button>
+        <button id="btn-hard-reload" class="btn">Clear cached copy and reload</button>
+      </div>
+      <p class="note">Both reloads disconnect the board.</p>
+    </section>
+
+    <section class="card span">
+      <h2>Version history</h2>
+      <div id="changelog" class="changelog">Loading.</div>
     </section>
   </div>
 </section>

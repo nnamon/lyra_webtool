@@ -543,3 +543,23 @@ footer p { margin: 3px 0; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Version history */
+.changelog { font-size: 13px; line-height: 1.55; }
+.changelog h3 {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.changelog h3:first-child { margin-top: 2px; }
+.changelog p { margin: 0 0 12px; color: var(--text-2); }
+.changelog ul { margin: 0 0 4px; padding-left: 20px; color: var(--text-2); }
+.changelog li { margin-bottom: 4px; }
+.changelog code {
+  background: var(--fill);
+  padding: 0.1em 0.38em;
+  border-radius: 5px;
+  font-size: 0.88em;
+}
+.summary.update { background: var(--blue-tint); }

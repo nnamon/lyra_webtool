@@ -245,6 +245,7 @@ pub fn start() {
     wire_efuse(&ctx);
     wire_flash(&ctx);
     wire_serial(&ctx);
+    wire_settings();
     wire_log();
 
     refresh(&ctx);
@@ -1545,6 +1546,190 @@ fn append_terminal(bytes: &[u8]) {
             el.set_scroll_top(el.scroll_height() as f64);
         }
     }
+}
+
+// ───────────────────────────── settings ───────────────────────────
+
+/// Version this build reports, from the workspace manifest.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Commit and date stamped in by `build.sh`, when it ran.
+fn build_stamp() -> String {
+    match (
+        option_env!("LYRA_BUILD_COMMIT"),
+        option_env!("LYRA_BUILD_DATE"),
+    ) {
+        (Some(c), Some(d)) => format!("{c} · {d}"),
+        (Some(c), None) => c.to_string(),
+        _ => "local build".to_string(),
+    }
+}
+
+fn wire_settings() {
+    set_text("about-version", VERSION);
+    set_text("about-build", &build_stamp());
+
+    on_click("btn-reload", || {
+        if let Some(win) = web_sys::window() {
+            let _ = win.location().reload();
+        }
+    });
+
+    on_click("btn-hard-reload", || {
+        spawn_local(async {
+            clear_caches().await;
+            if let Some(win) = web_sys::window() {
+                // A plain reload can still serve the cached document, so ask
+                // for a URL the cache has never seen.
+                let href = win.location().href().unwrap_or_default();
+                let base = href.split('?').next().unwrap_or(&href).to_string();
+                let bust = format!("{base}?reloaded={}", js_sys::Date::now() as u64);
+                let _ = win.location().replace(&bust);
+            }
+        });
+    });
+
+    on_click("btn-check-version", || spawn_local(check_version()));
+
+    // Load the history and check for a newer build without being asked.
+    spawn_local(load_changelog());
+    spawn_local(check_version());
+}
+
+/// Fetch `version.json` and compare it with what is running.
+async fn check_version() {
+    let deployed = match fetch_text("version.json").await {
+        Ok(t) => t,
+        Err(e) => {
+            set_text("about-deployed", "Unavailable");
+            log_warn(&format!("version check failed: {e}"));
+            return;
+        }
+    };
+    // Small fixed shape, so pull the fields out rather than pulling in a parser.
+    let field = |key: &str| -> Option<String> {
+        let pat = format!("\"{key}\":\"");
+        let start = deployed.find(&pat)? + pat.len();
+        let rest = &deployed[start..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    };
+    let version = field("version").unwrap_or_else(|| "unknown".into());
+    let commit = field("commit").unwrap_or_else(|| "unknown".into());
+    let date = field("date").unwrap_or_default();
+    set_text("about-deployed", &format!("{version} · {commit} · {date}"));
+
+    let running_commit = option_env!("LYRA_BUILD_COMMIT").unwrap_or("");
+    let stale = version != VERSION || (!running_commit.is_empty() && commit != running_commit);
+    if stale {
+        set_text(
+            "update-notice",
+            &format!(
+                "Version {version} is deployed. You are running {VERSION}.\n\
+                 Use Clear cached copy and reload to pick it up."
+            ),
+        );
+        if let Some(el) = by_id("update-notice") {
+            el.set_class_name("summary update");
+        }
+        set_hidden("update-notice", false);
+    } else {
+        set_hidden("update-notice", true);
+    }
+}
+
+/// Fetch `CHANGELOG.md` and render it into the Version history card.
+async fn load_changelog() {
+    match fetch_text("CHANGELOG.md").await {
+        Ok(md) => set_html("changelog", &render_changelog(&md)),
+        Err(e) => set_text("changelog", &format!("Version history unavailable: {e}")),
+    }
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
+    let win = web_sys::window().ok_or("no window")?;
+    let resp = wasm_bindgen_futures::JsFuture::from(win.fetch_with_str(url))
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let resp: web_sys::Response = resp.dyn_into().map_err(|_| "not a Response".to_string())?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text = wasm_bindgen_futures::JsFuture::from(resp.text().map_err(|e| format!("{e:?}"))?)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    text.as_string().ok_or_else(|| "empty response".to_string())
+}
+
+/// Drop every Cache Storage entry, so the next load refetches.
+async fn clear_caches() {
+    let Some(win) = web_sys::window() else { return };
+    let Ok(caches) = win.caches() else { return };
+    let Ok(keys) = wasm_bindgen_futures::JsFuture::from(caches.keys()).await else {
+        return;
+    };
+    let keys = js_sys::Array::from(&keys);
+    for i in 0..keys.length() {
+        if let Some(name) = keys.get(i).as_string() {
+            let _ = wasm_bindgen_futures::JsFuture::from(caches.delete(&name)).await;
+        }
+    }
+}
+
+/// Render the subset of Markdown the changelog uses.
+///
+/// Headings, bullets, paragraphs and inline code. Enough for this file, and
+/// cheaper than a Markdown crate in the wasm bundle.
+fn render_changelog(md: &str) -> String {
+    let mut out = String::new();
+    let mut in_list = false;
+    let close = |out: &mut String, in_list: &mut bool| {
+        if *in_list {
+            out.push_str("</ul>");
+            *in_list = false;
+        }
+    };
+    for line in md.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            close(&mut out, &mut in_list);
+        } else if let Some(h) = t.strip_prefix("## ") {
+            close(&mut out, &mut in_list);
+            out.push_str(&format!("<h3>{}</h3>", inline(h)));
+        } else if t.starts_with("# ") {
+            continue; // the card already has the title
+        } else if let Some(item) = t.strip_prefix("- ") {
+            if !in_list {
+                out.push_str("<ul>");
+                in_list = true;
+            }
+            out.push_str(&format!("<li>{}</li>", inline(item)));
+        } else {
+            close(&mut out, &mut in_list);
+            out.push_str(&format!("<p>{}</p>", inline(t)));
+        }
+    }
+    close(&mut out, &mut in_list);
+    out
+}
+
+/// Escape a line, then turn paired backticks into `code` spans.
+fn inline(text: &str) -> String {
+    let escaped = escape_html(text);
+    let mut out = String::with_capacity(escaped.len());
+    let mut open = false;
+    for ch in escaped.chars() {
+        if ch == '`' {
+            out.push_str(if open { "</code>" } else { "<code>" });
+            open = !open;
+        } else {
+            out.push(ch);
+        }
+    }
+    if open {
+        out.push_str("</code>");
+    }
+    out
 }
 
 // ───────────────────────────── log pane ────────────────────────────

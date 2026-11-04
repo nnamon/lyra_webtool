@@ -28,6 +28,7 @@ features = [
   "Event", "EventTarget", "MouseEvent", "KeyboardEvent",
   "File", "FileList", "Blob", "Url",
   "DomTokenList", "CssStyleDeclaration", "Clipboard",
+  "Location", "Response", "Request", "CacheStorage", "Cache",
   # WebUSB
   "Usb", "UsbDevice", "UsbDeviceFilter", "UsbDeviceRequestOptions",
   "UsbConfiguration", "UsbInterface", "UsbAlternateInterface",

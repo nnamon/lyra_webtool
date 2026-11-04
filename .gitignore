@@ -2,3 +2,5 @@
 /www/pkg
 **/*.rs.bk
 .DS_Store
+/www/version.json
+/www/CHANGELOG.md
