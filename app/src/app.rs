@@ -1,0 +1,1482 @@
+//! Application state and event wiring.
+//!
+//! All device logic lives here in Rust; the HTML is a static shell whose
+//! controls this module finds by id and drives.
+
+use std::cell::{Cell, RefCell};
+use std::future::Future;
+use std::rc::Rc;
+
+use rockusb::device::{Device, DeviceMode};
+use rockusb::image::{Firmware, UpdateImage, RKFW_HEADER_LEN};
+use rockusb::loader::{EntryType, RkBoot};
+use rockusb::protocol::{BootStage, ResetOpcode, StorageMedia, SECTOR_SIZE};
+use wasm_bindgen_futures::spawn_local;
+
+use crate::dom::{self, *};
+use crate::serial::{SerialConsole, COMMON_BAUD_RATES, DEFAULT_BAUD};
+use crate::webusb::WebUsbTransport;
+
+/// Bytes moved per flash chunk. Sector-aligned so only the final chunk of an
+/// item can be partial.
+const FLASH_CHUNK: u32 = 256 * 1024;
+
+/// Everything that is not the live device handle.
+#[derive(Default)]
+pub struct State {
+    /// Parsed loader container, for the MaskROM bootstrap.
+    loader: Option<RkBoot>,
+    /// The chosen `update.img`, kept as a `File` so ranges can be read lazily.
+    image_file: Option<web_sys::File>,
+    /// Header of the chosen image.
+    image_header: Option<UpdateImage>,
+    /// Item table of the chosen image.
+    firmware: Option<Firmware>,
+    /// Most recent LBA/DRAM read, for "save to file".
+    last_read: Option<(String, Vec<u8>)>,
+    /// Storage media reported by the device.
+    media: Vec<StorageMedia>,
+    /// Open serial console.
+    serial: Option<SerialConsole>,
+}
+
+/// Cheap-to-clone handle to shared application state.
+#[derive(Clone)]
+pub struct Ctx {
+    dev: Rc<RefCell<Option<Device<WebUsbTransport>>>>,
+    state: Rc<RefCell<State>>,
+    busy: Rc<Cell<bool>>,
+}
+
+impl Ctx {
+    fn new() -> Self {
+        Self {
+            dev: Rc::new(RefCell::new(None)),
+            state: Rc::new(RefCell::new(State::default())),
+            busy: Rc::new(Cell::new(false)),
+        }
+    }
+
+    fn is_connected(&self) -> bool {
+        self.dev.borrow().is_some()
+    }
+}
+
+// ───────────────────────────── logging ─────────────────────────────
+
+fn now() -> String {
+    let d = js_sys::Date::new_0();
+    format!(
+        "{:02}:{:02}:{:02}",
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds()
+    )
+}
+
+fn log_class(class: &str, msg: &str) {
+    if let Some(el) = by_id("log") {
+        let line = format!(
+            "<span class=\"t\">{}</span> <span class=\"{}\">{}</span>\n",
+            now(),
+            class,
+            escape_html(msg)
+        );
+        let current = el.inner_html();
+        el.set_inner_html(&format!("{current}{line}"));
+        el.set_scroll_top(el.scroll_height() as f64);
+    }
+}
+
+fn log(msg: &str) {
+    log_class("", msg);
+}
+fn log_ok(msg: &str) {
+    log_class("ok", msg);
+}
+fn log_warn(msg: &str) {
+    log_class("warn", msg);
+}
+fn log_err(msg: &str) {
+    log_class("err", msg);
+}
+
+// ───────────────────────────── status / enablement ─────────────────
+
+/// Controls that only make sense with a device attached.
+const DEVICE_BUTTONS: &[&str] = &[
+    "btn-read-info",
+    "btn-test-ready",
+    "btn-reset-reset",
+    "btn-reset-maskrom",
+    "btn-reset-msc",
+    "btn-reset-poweroff",
+    "btn-reset-disconnect",
+    "btn-read-storage",
+    "btn-erase-system",
+    "btn-erase-lba",
+    "btn-erase-block",
+    "btn-test-badblock",
+    "btn-read-lba",
+    "btn-write-lba",
+    "btn-read-sdram",
+    "btn-write-sdram",
+    "btn-exec-sdram",
+    "btn-read-efuse",
+];
+
+fn set_status(dot: &str, text: &str) {
+    if let Some(el) = by_id("status-dot") {
+        el.set_class_name(&format!("dot {dot}"));
+    }
+    set_text("status-text", text);
+}
+
+fn refresh(ctx: &Ctx) {
+    let connected = ctx.is_connected();
+    let busy = ctx.busy.get();
+    for id in DEVICE_BUTTONS {
+        set_disabled(id, !connected || busy);
+    }
+    set_hidden("btn-disconnect", !connected);
+    set_disabled("btn-connect", connected || busy);
+
+    let st = ctx.state.borrow();
+    set_disabled(
+        "btn-download-boot",
+        !connected || busy || st.loader.is_none(),
+    );
+    set_disabled("btn-flash", !connected || busy || st.firmware.is_none());
+    set_disabled("btn-save-lba", st.last_read.is_none());
+    set_disabled("sel-storage", !connected || busy || st.media.is_empty());
+    set_disabled(
+        "btn-switch-storage",
+        !connected || busy || st.media.is_empty(),
+    );
+    drop(st);
+
+    if busy {
+        return;
+    }
+    if connected {
+        let mode = ctx
+            .dev
+            .borrow()
+            .as_ref()
+            .map(|d| d.mode().as_str().to_string())
+            .unwrap_or_default();
+        set_status("on", &format!("{mode} mode"));
+    } else {
+        set_status("", "Not connected");
+    }
+}
+
+/// Run an async device operation, serialised against other operations.
+fn run_op<F, Fut>(ctx: &Ctx, label: &'static str, body: F)
+where
+    F: FnOnce(Ctx) -> Fut + 'static,
+    Fut: Future<Output = Result<String, String>> + 'static,
+{
+    if ctx.busy.get() {
+        log_warn("another operation is still running");
+        return;
+    }
+    ctx.busy.set(true);
+    set_status("busy", label);
+    for id in DEVICE_BUTTONS {
+        set_disabled(id, true);
+    }
+    let ctx2 = ctx.clone();
+    spawn_local(async move {
+        match body(ctx2.clone()).await {
+            Ok(msg) if !msg.is_empty() => log_ok(&msg),
+            Ok(_) => {}
+            Err(e) => log_err(&e),
+        }
+        ctx2.busy.set(false);
+        refresh(&ctx2);
+    });
+}
+
+// ───────────────────────────── entry point ─────────────────────────
+
+/// Wire every control and render the initial state.
+pub fn start() {
+    let ctx = Ctx::new();
+
+    check_browser_support();
+    populate_baud_rates();
+    wire_tabs();
+    wire_connection(&ctx);
+    wire_device_info(&ctx);
+    wire_resets(&ctx);
+    wire_storage(&ctx);
+    wire_memory(&ctx);
+    wire_efuse(&ctx);
+    wire_flash(&ctx);
+    wire_serial(&ctx);
+    wire_log();
+
+    refresh(&ctx);
+    log("Lyra Web Tool ready.");
+    log("Protocol derived from Rockchip upgrade_tool v2.17; rockusb over WebUSB.");
+}
+
+fn check_browser_support() {
+    let Some(win) = web_sys::window() else { return };
+    let nav = win.navigator();
+    let has_usb = !nav.usb().is_undefined() && !nav.usb().is_null();
+    if !has_usb {
+        set_hidden("compat", false);
+        set_text(
+            "compat",
+            "This browser does not support WebUSB, which this flasher requires. \
+             Chrome or Edge (desktop) will work; Firefox and Safari do not implement WebUSB.",
+        );
+        set_disabled("btn-connect", true);
+    }
+}
+
+fn populate_baud_rates() {
+    let opts: String = COMMON_BAUD_RATES
+        .iter()
+        .map(|b| {
+            let sel = if *b == DEFAULT_BAUD { " selected" } else { "" };
+            format!("<option value=\"{b}\"{sel}>{b}</option>")
+        })
+        .collect();
+    set_html("sel-baud", &opts);
+}
+
+fn wire_tabs() {
+    let tabs = doc().query_selector_all(".tab").ok();
+    let Some(tabs) = tabs else { return };
+    for i in 0..tabs.length() {
+        let Some(node) = tabs.item(i) else { continue };
+        let Ok(el) = node.dyn_into::<web_sys::HtmlElement>() else {
+            continue;
+        };
+        let name = el.get_attribute("data-tab").unwrap_or_default();
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            // Deactivate everything, then light up the clicked tab.
+            if let Ok(all) = doc().query_selector_all(".tab") {
+                for j in 0..all.length() {
+                    if let Some(n) = all.item(j) {
+                        if let Ok(e) = n.dyn_into::<web_sys::Element>() {
+                            e.set_class_name("tab");
+                        }
+                    }
+                }
+            }
+            if let Ok(all) = doc().query_selector_all(".panel") {
+                for j in 0..all.length() {
+                    if let Some(n) = all.item(j) {
+                        if let Ok(e) = n.dyn_into::<web_sys::Element>() {
+                            e.set_class_name("panel");
+                        }
+                    }
+                }
+            }
+            if let Some(t) = doc()
+                .query_selector(&format!(".tab[data-tab='{name}']"))
+                .ok()
+                .flatten()
+            {
+                t.set_class_name("tab active");
+            }
+            if let Some(p) = doc().get_element_by_id(&format!("panel-{name}")) {
+                p.set_class_name("panel active");
+            }
+        });
+        el.set_onclick(Some(cb.as_ref().unchecked_ref()));
+        cb.forget();
+    }
+}
+
+use wasm_bindgen::JsCast;
+
+// ───────────────────────────── connection ──────────────────────────
+
+fn wire_connection(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_click("btn-connect", move || {
+        let c2 = c.clone();
+        run_op(&c, "connecting", move |ctx| async move {
+            let transport = WebUsbTransport::request()
+                .await
+                .map_err(|e| format!("connect failed: {e}"))?;
+
+            let vid = transport.vendor_id();
+            let pid = transport.product_id();
+            let usb_ver = transport.usb_version();
+            let product = transport.product_name().unwrap_or_else(|| "—".into());
+            let serial = transport.serial_number().unwrap_or_else(|| "—".into());
+            let mode = DeviceMode::from_bcd_usb(usb_ver);
+
+            set_text("dev-mode", mode.as_str());
+            set_text("dev-vidpid", &format!("{vid:04x}:{pid:04x}"));
+            set_text("dev-product", &product);
+            set_text("dev-serial", &serial);
+
+            *ctx.dev.borrow_mut() = Some(Device::new(transport, mode));
+            let _ = c2;
+            Ok(format!(
+                "connected: {vid:04x}:{pid:04x} in {} mode (bcdUSB {usb_ver:#06x})",
+                mode.as_str()
+            ))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-disconnect", move || {
+        let c2 = c.clone();
+        run_op(&c, "disconnecting", move |ctx| async move {
+            if let Some(dev) = ctx.dev.borrow_mut().take() {
+                let _ = dev.into_transport().close().await;
+            }
+            for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
+                set_text(id, "—");
+            }
+            let _ = c2;
+            Ok("disconnected".into())
+        });
+    });
+}
+
+// ───────────────────────────── device info ─────────────────────────
+
+fn wire_device_info(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_click("btn-read-info", move || {
+        run_op(&c, "reading info", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+
+            match dev.read_chip_info().await {
+                Ok(ci) => set_text("info-chip", &dom::hex(&ci)),
+                Err(e) => set_text("info-chip", &format!("unavailable ({e})")),
+            }
+            match dev.read_flash_id().await {
+                Ok(id) => set_text("info-flashid", &dom::hex(&id)),
+                Err(e) => set_text("info-flashid", &format!("unavailable ({e})")),
+            }
+            match dev.read_flash_info().await {
+                Ok(fi) => {
+                    set_text(
+                        "info-size",
+                        &format!(
+                            "{} ({} sectors, {} MiB)",
+                            human_bytes(fi.size_bytes()),
+                            fi.sector_count,
+                            fi.size_mib()
+                        ),
+                    );
+                    set_text(
+                        "info-block",
+                        &format!(
+                            "{} KiB ({} sectors)",
+                            fi.block_size_kib(),
+                            fi.block_size_sectors
+                        ),
+                    );
+                    set_text("info-page", &format!("{} sectors", fi.page_size_sectors));
+                    set_text("info-ecc", &fi.ecc_bits.to_string());
+                    set_text(
+                        "info-manuf",
+                        &format!("{} (code {})", fi.manufacturer(), fi.manufacturer_code),
+                    );
+                }
+                Err(e) => set_text("info-size", &format!("unavailable ({e})")),
+            }
+            match dev.read_capability().await {
+                Ok(cap) => {
+                    let mut flags = Vec::new();
+                    if cap.direct_lba() {
+                        flags.push("direct-LBA");
+                    }
+                    if cap.vendor_storage() {
+                        flags.push("vendor-storage");
+                    }
+                    if cap.first_4m_access() {
+                        flags.push("first-4m");
+                    }
+                    if cap.read_lba() {
+                        flags.push("read-LBA");
+                    }
+                    if cap.new_idb() {
+                        flags.push("new-IDB");
+                    }
+                    if cap.switch_storage() {
+                        flags.push("switch-storage");
+                    }
+                    set_text(
+                        "info-cap",
+                        &format!("{}  [{}]", dom::hex(&cap.raw), flags.join(", ")),
+                    );
+                }
+                Err(e) => set_text("info-cap", &format!("unavailable ({e})")),
+            }
+            Ok("device info read".into())
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-test-ready", move || {
+        run_op(&c, "testing", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            let status = dev
+                .test_unit_ready()
+                .await
+                .map_err(|e| format!("device not ready: {e}"))?;
+            Ok(format!("device ready, status {}", dom::hex(&status)))
+        });
+    });
+}
+
+fn wire_resets(ctx: &Ctx) {
+    for (id, op, name) in [
+        ("btn-reset-reset", ResetOpcode::Reset, "reset"),
+        ("btn-reset-maskrom", ResetOpcode::Maskrom, "enter MaskROM"),
+        (
+            "btn-reset-msc",
+            ResetOpcode::MassStorage,
+            "switch to mass storage",
+        ),
+        ("btn-reset-poweroff", ResetOpcode::PowerOff, "power off"),
+        (
+            "btn-reset-disconnect",
+            ResetOpcode::Disconnect,
+            "disconnect",
+        ),
+    ] {
+        let c = ctx.clone();
+        on_click(id, move || {
+            run_op(&c, name, move |ctx| async move {
+                {
+                    let mut guard = ctx.dev.borrow_mut();
+                    let dev = guard.as_mut().ok_or("no device")?;
+                    dev.reset_device(op)
+                        .await
+                        .map_err(|e| format!("{name} failed: {e}"))?;
+                }
+                // The device leaves the bus, so drop our handle.
+                if let Some(dev) = ctx.dev.borrow_mut().take() {
+                    let _ = dev.into_transport().close().await;
+                }
+                for id in ["dev-mode", "dev-vidpid", "dev-product", "dev-serial"] {
+                    set_text(id, "—");
+                }
+                log_warn("device left the bus; reconnect to continue");
+                Ok(format!("{name} sent"))
+            });
+        });
+    }
+}
+
+// ───────────────────────────── storage ─────────────────────────────
+
+fn wire_storage(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_click("btn-read-storage", move || {
+        run_op(&c, "reading storage", move |ctx| async move {
+            let media = {
+                let mut guard = ctx.dev.borrow_mut();
+                let dev = guard.as_mut().ok_or("no device")?;
+                let mask = dev
+                    .storage_mask()
+                    .await
+                    .map_err(|e| format!("cannot read storage list: {e}"))?;
+                let media = StorageMedia::from_mask(mask);
+                set_text(
+                    "storage-list",
+                    &format!(
+                        "{:#010x} → {}",
+                        mask,
+                        if media.is_empty() {
+                            "none reported".to_string()
+                        } else {
+                            media
+                                .iter()
+                                .map(|m| m.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }
+                    ),
+                );
+                media
+            };
+            let opts: String = media
+                .iter()
+                .map(|m| format!("<option value=\"{}\">{}</option>", *m as u8, m.as_str()))
+                .collect();
+            set_html("sel-storage", &opts);
+            ctx.state.borrow_mut().media = media.clone();
+            Ok(format!("{} storage medium/media reported", media.len()))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-switch-storage", move || {
+        run_op(&c, "switching storage", move |ctx| async move {
+            let code = parse_u32(&value("sel-storage")).map_err(|e| e)? as u8;
+            let media = StorageMedia::from_code(code).ok_or("unknown storage code")?;
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.switch_storage(media)
+                .await
+                .map_err(|e| format!("switch failed: {e}"))?;
+            Ok(format!("switched to {}", media.as_str()))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-erase-system", move || {
+        if !confirm("Erase the entire selected storage? This cannot be undone.") {
+            return;
+        }
+        run_op(&c, "erasing device", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.erase_system_disk()
+                .await
+                .map_err(|e| format!("erase failed: {e}"))?;
+            Ok("whole-device erase issued".into())
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-erase-lba", move || {
+        let Ok(start) = parse_u32(&value("erase-lba-start")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(count) = parse_u32(&value("erase-lba-count")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        if !confirm(&format!(
+            "Erase {count} sectors starting at {start}? This destroys data."
+        )) {
+            return;
+        }
+        run_op(&c, "erasing range", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            // EraseLba takes a 16-bit count, so walk the range in chunks.
+            let mut done = 0u32;
+            while done < count {
+                let this = (count - done).min(0xffff);
+                dev.erase_lba(start + done, this)
+                    .await
+                    .map_err(|e| format!("erase failed at sector {}: {e}", start + done))?;
+                done += this;
+            }
+            Ok(format!("erased {count} sectors from {start}"))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-erase-block", move || {
+        let Ok(cs) = parse_u32(&value("erase-blk-cs")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(start) = parse_u32(&value("erase-blk-start")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(count) = parse_u32(&value("erase-blk-count")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let force = is_checked("chk-erase-force");
+        if !confirm(&format!("Erase {count} blocks from {start}?")) {
+            return;
+        }
+        run_op(&c, "erasing blocks", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.erase_block(cs as u8, start, count, force)
+                .await
+                .map_err(|e| format!("block erase failed: {e}"))?;
+            Ok(format!(
+                "erased {count} blocks from {start}{}",
+                if force { " (forced)" } else { "" }
+            ))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-test-badblock", move || {
+        let Ok(cs) = parse_u32(&value("bb-cs")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(start) = parse_u32(&value("bb-start")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(count) = parse_u32(&value("bb-count")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        run_op(&c, "scanning blocks", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            let states = dev
+                .test_bad_block(cs as u8, start, count)
+                .await
+                .map_err(|e| format!("bad-block scan failed: {e}"))?;
+            let bad: Vec<String> = states
+                .iter()
+                .enumerate()
+                .filter(|(_, &s)| s != 0)
+                .map(|(i, &s)| format!("block {} = {s:#04x}", start + i as u32))
+                .collect();
+            let text = if bad.is_empty() {
+                format!("{} blocks scanned from {start}: all good\n", states.len())
+            } else {
+                format!(
+                    "{} blocks scanned from {start}: {} bad\n{}\n",
+                    states.len(),
+                    bad.len(),
+                    bad.join("\n")
+                )
+            };
+            set_text("bb-out", &text);
+            set_hidden("bb-out", false);
+            Ok(format!("{} bad block(s) found", bad.len()))
+        });
+    });
+}
+
+// ───────────────────────────── memory / LBA ────────────────────────
+
+fn wire_memory(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_click("btn-read-lba", move || {
+        let Ok(start) = parse_u32(&value("rl-start")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(count) = parse_u32(&value("rl-count")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        if count == 0 {
+            log_err("sector count must be at least 1");
+            return;
+        }
+        run_op(&c, "reading sectors", move |ctx| async move {
+            let data = {
+                let mut guard = ctx.dev.borrow_mut();
+                let dev = guard.as_mut().ok_or("no device")?;
+                let mut progress = |_done: u32, _total: u32| {};
+                dev.read_lba_all(start, count, &mut progress)
+                    .await
+                    .map_err(|e| format!("read failed: {e}"))?
+            };
+            // Show a bounded preview; the full buffer stays available to save.
+            let preview = &data[..data.len().min(4096)];
+            let mut text = hexdump(preview, start as u64 * SECTOR_SIZE as u64);
+            if preview.len() < data.len() {
+                text.push_str(&format!(
+                    "\n… {} more bytes; use \"Save to file\" for all of it\n",
+                    data.len() - preview.len()
+                ));
+            }
+            set_text("rl-out", &text);
+            set_hidden("rl-out", false);
+            let n = data.len();
+            ctx.state.borrow_mut().last_read = Some((format!("lba_{start}_{count}.bin"), data));
+            Ok(format!(
+                "read {n} bytes ({count} sectors) from sector {start}"
+            ))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-save-lba", move || {
+        let st = c.state.borrow();
+        match st.last_read.as_ref() {
+            Some((name, data)) => match save_file(name, data) {
+                Ok(()) => log_ok(&format!("saved {name} ({} bytes)", data.len())),
+                Err(e) => log_err(&e),
+            },
+            None => log_warn("nothing has been read yet"),
+        }
+    });
+
+    let c = ctx.clone();
+    on_click("btn-write-lba", move || {
+        let Ok(start) = parse_u32(&value("wl-start")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Some(f) = dom::file("file-wl") else {
+            log_err("choose a file to write first");
+            return;
+        };
+        if !confirm(&format!(
+            "Write {} to sector {start}? This overwrites flash contents.",
+            f.name()
+        )) {
+            return;
+        }
+        run_op(&c, "writing sectors", move |ctx| async move {
+            let name = f.name();
+            let total = f.size() as u64;
+            set_hidden("wl-progress-wrap", false);
+            let mut offset = 0u64;
+            let mut sector = start;
+            while offset < total {
+                let end = (offset + FLASH_CHUNK as u64).min(total);
+                let chunk = read_file_range(&f, offset as u32, end as u32).await?;
+                {
+                    let mut guard = ctx.dev.borrow_mut();
+                    let dev = guard.as_mut().ok_or("no device")?;
+                    dev.write_lba(sector, &chunk)
+                        .await
+                        .map_err(|e| format!("write failed at sector {sector}: {e}"))?;
+                }
+                sector += chunk.len().div_ceil(SECTOR_SIZE) as u32;
+                offset = end;
+                let pct = (offset as f64 / total as f64 * 100.0) as u32;
+                set_progress(
+                    "wl-progress",
+                    "wl-progress-label",
+                    pct,
+                    &format!("{} / {}", human_bytes(offset), human_bytes(total)),
+                );
+            }
+            Ok(format!(
+                "wrote {name} ({}) to sector {start}",
+                human_bytes(total)
+            ))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-read-sdram", move || {
+        let Ok(addr) = parse_u32(&value("sdram-addr")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(len) = parse_u32(&value("sdram-len")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        run_op(&c, "reading DRAM", move |ctx| async move {
+            let data = {
+                let mut guard = ctx.dev.borrow_mut();
+                let dev = guard.as_mut().ok_or("no device")?;
+                dev.read_sdram(addr, len)
+                    .await
+                    .map_err(|e| format!("DRAM read failed: {e}"))?
+            };
+            set_text("sdram-out", &hexdump(&data, addr as u64));
+            set_hidden("sdram-out", false);
+            let n = data.len();
+            ctx.state.borrow_mut().last_read = Some((format!("dram_{addr:08x}.bin"), data));
+            Ok(format!("read {n} bytes of DRAM at {addr:#010x}"))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-write-sdram", move || {
+        let Ok(addr) = parse_u32(&value("sdram-addr")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Some(f) = dom::file("file-sdram") else {
+            log_err("choose a file to load into DRAM");
+            return;
+        };
+        run_op(&c, "writing DRAM", move |ctx| async move {
+            let data = read_file(&f).await?;
+            let n = data.len();
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.write_sdram(addr, &data)
+                .await
+                .map_err(|e| format!("DRAM write failed: {e}"))?;
+            Ok(format!("wrote {n} bytes to DRAM at {addr:#010x}"))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-exec-sdram", move || {
+        let Ok(addr) = parse_u32(&value("sdram-addr")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        if !confirm(&format!(
+            "Jump the chip to {addr:#010x}? It will stop answering commands."
+        )) {
+            return;
+        }
+        run_op(&c, "executing", move |ctx| async move {
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            dev.execute_sdram(addr)
+                .await
+                .map_err(|e| format!("execute failed: {e}"))?;
+            Ok(format!("jumped to {addr:#010x}"))
+        });
+    });
+}
+
+fn set_progress(bar_id: &str, label_id: &str, pct: u32, text: &str) {
+    if let Some(el) = by_id(bar_id) {
+        let _ = el.style().set_property("width", &format!("{pct}%"));
+    }
+    set_text(label_id, &format!("{pct}% · {text}"));
+}
+
+fn confirm(msg: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
+}
+
+// ───────────────────────────── eFuse ───────────────────────────────
+
+fn wire_efuse(ctx: &Ctx) {
+    // The write button stays disabled until the acknowledgement is ticked.
+    on_change("chk-efuse-confirm", || {
+        set_disabled("btn-write-efuse", !is_checked("chk-efuse-confirm"));
+    });
+
+    let c = ctx.clone();
+    on_click("btn-read-efuse", move || {
+        let Ok(addr) = parse_u32(&value("efuse-addr")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let Ok(len) = parse_u32(&value("efuse-len")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let legacy = value("sel-efuse-gen") == "legacy";
+        run_op(&c, "reading eFuse", move |ctx| async move {
+            let data = {
+                let mut guard = ctx.dev.borrow_mut();
+                let dev = guard.as_mut().ok_or("no device")?;
+                if legacy {
+                    dev.read_efuse(len).await
+                } else {
+                    dev.read_new_efuse(addr as u16, len as u16).await
+                }
+                .map_err(|e| format!("eFuse read failed: {e}"))?
+            };
+            set_text("efuse-out", &hexdump(&data, addr as u64));
+            set_hidden("efuse-out", false);
+            Ok(format!("read {} eFuse bytes", data.len()))
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-write-efuse", move || {
+        if !is_checked("chk-efuse-confirm") {
+            log_err("tick the acknowledgement before writing eFuses");
+            return;
+        }
+        let Ok(addr) = parse_u32(&value("efuse-addr")).map_err(|e| log_err(&e)) else {
+            return;
+        };
+        let bytes = match parse_hex_bytes(&value("efuse-data")) {
+            Ok(b) => b,
+            Err(e) => {
+                log_err(&e);
+                return;
+            }
+        };
+        let legacy = value("sel-efuse-gen") == "legacy";
+        if !confirm(&format!(
+            "Permanently program {} eFuse byte(s) at {addr:#x}? This CANNOT be undone.",
+            bytes.len()
+        )) {
+            return;
+        }
+        run_op(&c, "writing eFuse", move |ctx| async move {
+            let n = bytes.len();
+            let mut guard = ctx.dev.borrow_mut();
+            let dev = guard.as_mut().ok_or("no device")?;
+            if legacy {
+                dev.write_efuse(&bytes).await
+            } else {
+                dev.write_new_efuse(addr as u16, &bytes).await
+            }
+            .map_err(|e| format!("eFuse write failed: {e}"))?;
+            log_warn("eFuse written; this change is permanent");
+            Ok(format!("programmed {n} eFuse byte(s) at {addr:#x}"))
+        });
+    });
+}
+
+// ───────────────────────────── flashing ────────────────────────────
+
+fn wire_flash(ctx: &Ctx) {
+    // Loader file: parse the container and describe it.
+    let c = ctx.clone();
+    on_change("file-loader", move || {
+        let c = c.clone();
+        spawn_local(async move {
+            let Some(f) = dom::file("file-loader") else {
+                return;
+            };
+            match read_file(&f).await {
+                Ok(bytes) => match RkBoot::parse(&bytes, true) {
+                    Ok(boot) => {
+                        let mut s = format!(
+                            "{}  ·  {}  ·  chip {}\nreleased {}  ·  CRC32 {:#010x} verified\n",
+                            f.name(),
+                            human_bytes(bytes.len() as u64),
+                            boot.chip_name(),
+                            boot.release_time,
+                            boot.stored_crc
+                        );
+                        for ty in [EntryType::Entry471, EntryType::Entry472, EntryType::Loader] {
+                            for e in boot.entries_of(ty) {
+                                s.push_str(&format!(
+                                    "  {:?}  {:<24} {}\n",
+                                    ty,
+                                    e.name,
+                                    human_bytes(e.data_size as u64)
+                                ));
+                            }
+                        }
+                        set_text("loader-summary", &s);
+                        if let Some(el) = by_id("loader-summary") {
+                            el.set_class_name("summary");
+                        }
+                        set_hidden("loader-summary", false);
+                        log_ok(&format!("loader parsed: {} entries", boot.entries.len()));
+                        c.state.borrow_mut().loader = Some(boot);
+                        refresh(&c);
+                    }
+                    Err(e) => {
+                        set_text(
+                            "loader-summary",
+                            &format!("{} is not a usable loader:\n{e}", f.name()),
+                        );
+                        if let Some(el) = by_id("loader-summary") {
+                            el.set_class_name("summary bad");
+                        }
+                        set_hidden("loader-summary", false);
+                        log_err(&format!("loader rejected: {e}"));
+                        c.state.borrow_mut().loader = None;
+                        refresh(&c);
+                    }
+                },
+                Err(e) => log_err(&e),
+            }
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-download-boot", move || {
+        run_op(&c, "downloading boot", move |ctx| async move {
+            // Clone the entry payloads out so the state borrow ends here.
+            let stages: Vec<(BootStage, String, Vec<u8>, u32)> = {
+                let st = ctx.state.borrow();
+                let boot = st.loader.as_ref().ok_or("no loader selected")?;
+                let mut v = Vec::new();
+                for (ty, stage) in [
+                    (EntryType::Entry471, BootStage::Ddr),
+                    (EntryType::Entry472, BootStage::Loader),
+                ] {
+                    for e in boot.entries_of(ty) {
+                        v.push((
+                            stage,
+                            e.name.clone(),
+                            boot.entry_data(e).to_vec(),
+                            e.data_delay,
+                        ));
+                    }
+                }
+                v
+            };
+            if stages.is_empty() {
+                return Err("loader has no 471/472 entries to send".into());
+            }
+
+            for (stage, name, data, delay) in &stages {
+                {
+                    let mut guard = ctx.dev.borrow_mut();
+                    let dev = guard.as_mut().ok_or("no device")?;
+                    dev.send_boot_stage(*stage, data)
+                        .await
+                        .map_err(|e| format!("{:?} ({name}) failed: {e}", stage))?;
+                }
+                log(&format!(
+                    "sent {:?} {name}: {}",
+                    stage,
+                    human_bytes(data.len() as u64)
+                ));
+                // Honour the entry's own delay, as the tool does.
+                let wait = (*delay).max(50);
+                sleep_ms(wait).await;
+            }
+
+            // The loader is running now, so full commands are available.
+            if let Some(dev) = ctx.dev.borrow_mut().as_mut() {
+                dev.set_mode(DeviceMode::Loader);
+            }
+            set_text("dev-mode", DeviceMode::Loader.as_str());
+            log_warn(
+                "boot downloaded. The device re-enumerates as a Loader: \
+                 reconnect to talk to it.",
+            );
+            Ok(format!("{} boot stage(s) sent", stages.len()))
+        });
+    });
+
+    // Image file: read only the header first, then the tables.
+    let c = ctx.clone();
+    on_change("file-image", move || {
+        let c = c.clone();
+        spawn_local(async move {
+            let Some(f) = dom::file("file-image") else {
+                return;
+            };
+            let size = f.size() as u64;
+            let head = match read_file_range(&f, 0, RKFW_HEADER_LEN as u32).await {
+                Ok(h) => h,
+                Err(e) => {
+                    log_err(&e);
+                    return;
+                }
+            };
+            match UpdateImage::parse_header(&head) {
+                Ok(h) => {
+                    log_ok(&format!(
+                        "RKFW header: chip {}, loader {} B, firmware {} B",
+                        h.chip_name(),
+                        h.boot_size,
+                        h.fw_size
+                    ));
+                    // Pull just the loader + firmware regions, not the payloads.
+                    load_image_tables(c.clone(), f, size, h).await;
+                }
+                Err(e) => {
+                    set_text(
+                        "image-summary",
+                        &format!("{} is not an update.img:\n{e}", f.name()),
+                    );
+                    if let Some(el) = by_id("image-summary") {
+                        el.set_class_name("summary bad");
+                    }
+                    set_hidden("image-summary", false);
+                    set_hidden("item-table", true);
+                    log_err(&format!("image rejected: {e}"));
+                    c.state.borrow_mut().firmware = None;
+                    refresh(&c);
+                }
+            }
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-flash", move || {
+        if !confirm("Write the selected items to the device? This replaces the contents of flash.")
+        {
+            return;
+        }
+        run_op(
+            &c,
+            "flashing",
+            move |ctx| async move { flash_image(ctx).await },
+        );
+    });
+}
+
+/// Read the loader and item table out of a chosen image, without its payloads.
+async fn load_image_tables(ctx: Ctx, f: web_sys::File, size: u64, header: UpdateImage) {
+    let mut summary = format!(
+        "{}  ·  {}  ·  chip {}\nreleased {}\nloader @ {:#x} ({})   firmware @ {:#x} ({})\n",
+        f.name(),
+        human_bytes(size),
+        header.chip_name(),
+        header.release_time,
+        header.boot_offset,
+        human_bytes(header.boot_size as u64),
+        header.fw_offset,
+        human_bytes(header.fw_size as u64),
+    );
+
+    // Embedded loader, so a MaskROM board can be bootstrapped from the image.
+    if header.boot_size > 0 {
+        let r = header.boot_range();
+        if let Ok(bytes) = read_file_range(&f, r.start as u32, r.end as u32).await {
+            match RkBoot::parse(&bytes, true) {
+                Ok(boot) => {
+                    summary.push_str(&format!(
+                        "embedded loader: {} entries, chip {}\n",
+                        boot.entries.len(),
+                        boot.chip_name()
+                    ));
+                    ctx.state.borrow_mut().loader = Some(boot);
+                }
+                Err(e) => summary.push_str(&format!("embedded loader unreadable: {e}\n")),
+            }
+        }
+    }
+
+    // The item table sits at the start of the inner firmware. Read a bounded
+    // prefix: the header plus the largest table we accept.
+    let fw_start = header.fw_offset as u64;
+    let prefix_len = (header.fw_size as u64).min(64 * 1024);
+    let items = match read_file_range(&f, fw_start as u32, (fw_start + prefix_len) as u32).await {
+        Ok(prefix) => match rockusb::image::RkafFirmware::parse(&prefix) {
+            Ok(fw) => {
+                summary.push_str(&format!(
+                    "model {}  ·  id {}  ·  by {}\n{} item(s)\n",
+                    fw.model,
+                    fw.id,
+                    fw.manufacturer,
+                    fw.items.len()
+                ));
+                Some(fw)
+            }
+            Err(e) => {
+                summary.push_str(&format!("inner firmware table unreadable: {e}\n"));
+                None
+            }
+        },
+        Err(e) => {
+            summary.push_str(&format!("cannot read inner firmware: {e}\n"));
+            None
+        }
+    };
+
+    set_text("image-summary", &summary);
+    if let Some(el) = by_id("image-summary") {
+        el.set_class_name(if items.is_some() {
+            "summary"
+        } else {
+            "summary bad"
+        });
+    }
+    set_hidden("image-summary", false);
+
+    match items {
+        Some(fw) => {
+            render_item_table(&fw);
+            ctx.state.borrow_mut().firmware = Some(Firmware {
+                header,
+                loader: None,
+                firmware: Some(fw),
+            });
+            ctx.state.borrow_mut().image_file = Some(f);
+        }
+        None => {
+            set_hidden("item-table", true);
+            ctx.state.borrow_mut().firmware = None;
+        }
+    }
+    ctx.state.borrow_mut().image_header = None;
+    refresh(&ctx);
+}
+
+fn render_item_table(fw: &rockusb::image::RkafFirmware) {
+    let mut rows = String::new();
+    for (i, item) in fw.items.iter().enumerate() {
+        let writable = item.is_writable();
+        let target = if writable {
+            format!(
+                "sector {} ({:#x})",
+                item.target_sector,
+                item.target_byte_offset()
+            )
+        } else {
+            "— not written —".to_string()
+        };
+        rows.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td>\
+             <td><input type=\"checkbox\" class=\"item-chk\" data-item=\"{i}\"{}{}></td></tr>",
+            escape_html(&item.name),
+            escape_html(&item.file_name),
+            if writable { "" } else { "skip" },
+            escape_html(&target),
+            human_bytes(item.data_size as u64),
+            if writable { " checked" } else { "" },
+            if writable { "" } else { " disabled" },
+        ));
+    }
+    if let Some(tbody) = doc().query_selector("#item-table tbody").ok().flatten() {
+        tbody.set_inner_html(&rows);
+    }
+    set_hidden("item-table", false);
+}
+
+/// Which item indices the user has ticked.
+fn selected_items() -> Vec<usize> {
+    let mut out = Vec::new();
+    if let Ok(list) = doc().query_selector_all(".item-chk") {
+        for i in 0..list.length() {
+            let Some(n) = list.item(i) else { continue };
+            let Ok(input) = n.dyn_into::<web_sys::HtmlInputElement>() else {
+                continue;
+            };
+            if input.checked() {
+                if let Some(idx) = input
+                    .get_attribute("data-item")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    out.push(idx);
+                }
+            }
+        }
+    }
+    out
+}
+
+async fn flash_image(ctx: Ctx) -> Result<String, String> {
+    // Snapshot what we need, so no borrow is held across the transfers.
+    let (fw_offset, items, file, md5_expect, md5_len) = {
+        let st = ctx.state.borrow();
+        let fw = st.firmware.as_ref().ok_or("no firmware image selected")?;
+        let inner = fw
+            .firmware
+            .as_ref()
+            .ok_or("image has no readable item table")?;
+        let file = st
+            .image_file
+            .as_ref()
+            .ok_or("image file is no longer available")?
+            .clone();
+        (
+            fw.header.fw_offset as u64,
+            inner.items.clone(),
+            file,
+            fw.header.stored_md5.clone(),
+            fw.header.md5_covered_len(),
+        )
+    };
+
+    let chosen = selected_items();
+    if chosen.is_empty() {
+        return Err("no items are selected".into());
+    }
+
+    // Optional integrity check, streamed so a large image is not loaded whole.
+    if is_checked("chk-verify-md5") {
+        match md5_expect {
+            Some(expected) => {
+                log("verifying image MD5…");
+                use md5::{Digest, Md5};
+                let mut h = Md5::new();
+                let mut off = 0u64;
+                while off < md5_len {
+                    let end = (off + FLASH_CHUNK as u64).min(md5_len);
+                    let chunk = read_file_range(&file, off as u32, end as u32).await?;
+                    h.update(&chunk);
+                    off = end;
+                    let pct = (off as f64 / md5_len as f64 * 100.0) as u32;
+                    set_progress(
+                        "flash-progress",
+                        "flash-progress-label",
+                        pct,
+                        "verifying MD5",
+                    );
+                }
+                let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+                if got != expected {
+                    return Err(format!(
+                        "image MD5 mismatch (file says {expected}, computed {got}); refusing to flash"
+                    ));
+                }
+                log_ok("image MD5 verified");
+            }
+            None => log_warn("image carries no MD5; skipping verification"),
+        }
+    }
+
+    set_hidden("flash-progress-wrap", false);
+    let total: u64 = chosen
+        .iter()
+        .filter_map(|i| items.get(*i))
+        .map(|i| i.data_size as u64)
+        .sum();
+    let mut moved = 0u64;
+
+    for idx in chosen {
+        let item = items.get(idx).ok_or("item index out of range")?;
+        if !item.is_writable() {
+            continue;
+        }
+        log(&format!(
+            "writing {} → sector {} ({})",
+            item.name,
+            item.target_sector,
+            human_bytes(item.data_size as u64)
+        ));
+
+        let base = fw_offset + item.data_offset as u64;
+        let size = item.data_size as u64;
+        let mut off = 0u64;
+        let mut sector = item.target_sector;
+
+        while off < size {
+            let end = (off + FLASH_CHUNK as u64).min(size);
+            let chunk = read_file_range(&file, (base + off) as u32, (base + end) as u32).await?;
+            {
+                let mut guard = ctx.dev.borrow_mut();
+                let dev = guard.as_mut().ok_or("device disconnected mid-flash")?;
+                dev.write_lba(sector, &chunk).await.map_err(|e| {
+                    format!("write failed for {} at sector {sector}: {e}", item.name)
+                })?;
+            }
+            sector += chunk.len().div_ceil(SECTOR_SIZE) as u32;
+            moved += chunk.len() as u64;
+            off = end;
+            let pct = if total > 0 {
+                (moved as f64 / total as f64 * 100.0) as u32
+            } else {
+                100
+            };
+            set_progress(
+                "flash-progress",
+                "flash-progress-label",
+                pct,
+                &format!("{} / {}", human_bytes(moved), human_bytes(total)),
+            );
+        }
+        log_ok(&format!("{} written", item.name));
+    }
+
+    if is_checked("chk-reset-after") {
+        let mut guard = ctx.dev.borrow_mut();
+        if let Some(dev) = guard.as_mut() {
+            let _ = dev.reset_device(ResetOpcode::Reset).await;
+            log_warn("reset sent; the device has left the bus");
+        }
+        drop(guard);
+        if let Some(dev) = ctx.dev.borrow_mut().take() {
+            let _ = dev.into_transport().close().await;
+        }
+    }
+
+    Ok(format!("flashed {} to the device", human_bytes(moved)))
+}
+
+/// Resolve after `ms` milliseconds, via `setTimeout`.
+async fn sleep_ms(ms: u32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+// ───────────────────────────── serial console ──────────────────────
+
+fn wire_serial(ctx: &Ctx) {
+    let c = ctx.clone();
+    on_click("btn-serial-connect", move || {
+        let c = c.clone();
+        spawn_local(async move {
+            let baud = parse_u32(&value("sel-baud")).unwrap_or(DEFAULT_BAUD);
+            match SerialConsole::request(baud).await {
+                Ok(console) => {
+                    log_ok(&format!("serial port opened at {baud} baud"));
+                    set_hidden("btn-serial-disconnect", false);
+                    set_hidden("btn-serial-connect", true);
+                    set_disabled("serial-input", false);
+                    set_disabled("btn-serial-send", false);
+                    c.state.borrow_mut().serial = Some(console);
+                    pump_serial(c.clone());
+                }
+                Err(e) => log_err(&format!("{e}")),
+            }
+        });
+    });
+
+    let c = ctx.clone();
+    on_click("btn-serial-disconnect", move || {
+        let c = c.clone();
+        spawn_local(async move {
+            let console = c.state.borrow_mut().serial.take();
+            if let Some(mut console) = console {
+                let _ = console.close().await;
+            }
+            set_hidden("btn-serial-disconnect", true);
+            set_hidden("btn-serial-connect", false);
+            set_disabled("serial-input", true);
+            set_disabled("btn-serial-send", true);
+            log("serial port closed");
+        });
+    });
+
+    on_click("btn-serial-clear", || set_text("serial-out", ""));
+
+    let c = ctx.clone();
+    let send = move || {
+        let c = c.clone();
+        let line = value("serial-input");
+        if line.is_empty() {
+            return;
+        }
+        set_value("serial-input", "");
+        spawn_local(async move {
+            let mut guard = c.state.borrow_mut();
+            if let Some(console) = guard.serial.as_mut() {
+                if let Err(e) = console.write_line(&line).await {
+                    log_err(&format!("{e}"));
+                }
+            } else {
+                log_warn("no serial port is open");
+            }
+        });
+    };
+    let s2 = send.clone();
+    on_click("btn-serial-send", move || s2());
+    on_enter("serial-input", move || send());
+}
+
+/// Continuously drain the serial port into the terminal pane.
+fn pump_serial(ctx: Ctx) {
+    spawn_local(async move {
+        loop {
+            let chunk = {
+                let mut guard = ctx.state.borrow_mut();
+                let Some(console) = guard.serial.as_mut() else {
+                    return;
+                };
+                console.read_chunk().await
+            };
+            match chunk {
+                Ok(Some(bytes)) if !bytes.is_empty() => append_terminal(&bytes),
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    log("serial stream ended");
+                    return;
+                }
+                Err(e) => {
+                    log_err(&format!("{e}"));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn append_terminal(bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    if let Some(el) = by_id("serial-out") {
+        let current = el.text_content().unwrap_or_default();
+        // Keep the pane bounded so a chatty console cannot grow without limit.
+        let mut combined = current + &text;
+        const MAX: usize = 200_000;
+        if combined.len() > MAX {
+            let cut = combined.len() - MAX;
+            combined = combined[cut..].to_string();
+        }
+        el.set_text_content(Some(&combined));
+        if is_checked("chk-serial-autoscroll") {
+            el.set_scroll_top(el.scroll_height() as f64);
+        }
+    }
+}
+
+// ───────────────────────────── log pane ────────────────────────────
+
+fn wire_log() {
+    on_click("btn-log-clear", || set_html("log", ""));
+    on_click("btn-log-copy", || {
+        if let Some(el) = by_id("log") {
+            let text = el.text_content().unwrap_or_default();
+            if let Some(win) = web_sys::window() {
+                let clipboard = win.navigator().clipboard();
+                let _ = clipboard.write_text(&text);
+                log("log copied to clipboard");
+            }
+        }
+    });
+}

@@ -1,0 +1,6 @@
+# WebUSB and Web Serial live behind web-sys' unstable API gate.
+[build]
+rustflags = ["--cfg=web_sys_unstable_apis"]
+
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]

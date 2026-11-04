@@ -1,0 +1,4 @@
+/target
+/www/pkg
+**/*.rs.bk
+.DS_Store

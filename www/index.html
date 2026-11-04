@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyra Web Tool — Luckfox Lyra Zero W flasher</title>
+<meta name="description" content="Flash a Luckfox Lyra Zero W (Rockchip RK3506B) from the browser over WebUSB.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>⚡</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<noscript class="banner error">This tool needs JavaScript and WebAssembly.</noscript>
+
+<header>
+  <div class="brand">
+    <span class="bolt">⚡</span>
+    <div>
+      <h1>Lyra Web Tool</h1>
+      <p class="sub">Luckfox Lyra Zero W · Rockchip RK3506B · rockusb over WebUSB</p>
+    </div>
+  </div>
+  <div class="conn">
+    <span id="status-dot" class="dot"></span>
+    <span id="status-text">Not connected</span>
+    <button id="btn-connect" class="primary">Connect device</button>
+    <button id="btn-disconnect" class="ghost" hidden>Disconnect</button>
+  </div>
+</header>
+
+<div id="compat" class="banner error" hidden></div>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="device" role="tab">Device</button>
+  <button class="tab" data-tab="flash" role="tab">Flash</button>
+  <button class="tab" data-tab="storage" role="tab">Storage</button>
+  <button class="tab" data-tab="memory" role="tab">Memory &amp; LBA</button>
+  <button class="tab" data-tab="otp" role="tab">eFuse</button>
+  <button class="tab" data-tab="console" role="tab">Serial console</button>
+</nav>
+
+<main>
+
+<!-- ───────────────────────── Device ───────────────────────── -->
+<section id="panel-device" class="panel active">
+  <div class="grid">
+    <div class="card">
+      <h2>Connection</h2>
+      <p class="hint">
+        Put the board in <strong>MaskROM</strong> mode (hold BOOT while plugging in USB),
+        or <strong>Loader</strong> mode, then press <em>Connect device</em>.
+        The browser will show a chooser listing Rockchip devices (vendor <code>0x2207</code>).
+      </p>
+      <dl id="dev-identity" class="kv">
+        <dt>Mode</dt><dd id="dev-mode">—</dd>
+        <dt>VID:PID</dt><dd id="dev-vidpid">—</dd>
+        <dt>Product</dt><dd id="dev-product">—</dd>
+        <dt>Serial</dt><dd id="dev-serial">—</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2>Chip &amp; flash</h2>
+      <div class="row">
+        <button id="btn-read-info" disabled>Read device info</button>
+        <button id="btn-test-ready" class="ghost" disabled>Test ready</button>
+      </div>
+      <dl id="dev-info" class="kv">
+        <dt>Chip info</dt><dd id="info-chip">—</dd>
+        <dt>Flash ID</dt><dd id="info-flashid">—</dd>
+        <dt>Flash size</dt><dd id="info-size">—</dd>
+        <dt>Block size</dt><dd id="info-block">—</dd>
+        <dt>Page size</dt><dd id="info-page">—</dd>
+        <dt>ECC bits</dt><dd id="info-ecc">—</dd>
+        <dt>Manufacturer</dt><dd id="info-manuf">—</dd>
+        <dt>Capability</dt><dd id="info-cap">—</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2>Reset</h2>
+      <p class="hint">The device leaves the bus after a reset; reconnect afterwards.</p>
+      <div class="row wrap">
+        <button id="btn-reset-reset" class="ghost" disabled>Reset</button>
+        <button id="btn-reset-maskrom" class="ghost" disabled>Enter MaskROM</button>
+        <button id="btn-reset-msc" class="ghost" disabled>Switch to mass storage</button>
+        <button id="btn-reset-poweroff" class="ghost" disabled>Power off</button>
+        <button id="btn-reset-disconnect" class="ghost" disabled>Disconnect</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── Flash ───────────────────────── -->
+<section id="panel-flash" class="panel">
+  <div class="grid">
+    <div class="card">
+      <h2>1 · Bootstrap from MaskROM</h2>
+      <p class="hint">
+        In MaskROM the chip only accepts two control transfers: <code>0x471</code> (DDR init)
+        and <code>0x472</code> (USB loader). Load a packed loader
+        (<code>rk3506_spl_loader_*.bin</code>) to bring the board up into Loader mode.
+        Nothing is written to flash by this step.
+      </p>
+      <input type="file" id="file-loader" accept=".bin">
+      <div id="loader-summary" class="summary" hidden></div>
+      <div class="row">
+        <button id="btn-download-boot" disabled>Download boot (DB)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Firmware image</h2>
+      <p class="hint">
+        Pick an <code>update.img</code>. Only its header is read at first, so a
+        large file is identified instantly. The embedded loader and the partition
+        table are listed before anything is written.
+      </p>
+      <input type="file" id="file-image" accept=".img">
+      <div id="image-summary" class="summary" hidden></div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="chk-verify-md5" checked> Verify MD5 before flashing</label>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h2>3 · Write</h2>
+      <p class="hint danger">
+        Writing replaces the contents of the selected storage. Check the partition
+        list below matches what you expect before starting.
+      </p>
+      <table id="item-table" class="table" hidden>
+        <thead><tr><th>Item</th><th>File</th><th>Target</th><th>Size</th><th>Write</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row">
+        <button id="btn-flash" class="primary" disabled>Flash selected items</button>
+        <label class="check"><input type="checkbox" id="chk-reset-after" checked> Reset board when done</label>
+      </div>
+      <div class="progress-wrap" hidden id="flash-progress-wrap">
+        <div class="progress"><div id="flash-progress" class="bar"></div></div>
+        <span id="flash-progress-label" class="mono">idle</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── Storage ───────────────────────── -->
+<section id="panel-storage" class="panel">
+  <div class="grid">
+    <div class="card">
+      <h2>Storage media</h2>
+      <p class="hint">
+        The Zero W has 256&nbsp;MB SPI NAND on board plus a microSD slot.
+        Switching storage needs a loader to be running.
+      </p>
+      <div class="row">
+        <button id="btn-read-storage" disabled>Read storage list</button>
+      </div>
+      <dl class="kv"><dt>Available</dt><dd id="storage-list">—</dd></dl>
+      <div class="row">
+        <select id="sel-storage" disabled></select>
+        <button id="btn-switch-storage" disabled>Switch</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Erase</h2>
+      <p class="hint danger">These operations destroy data on the selected storage.</p>
+      <div class="row wrap">
+        <button id="btn-erase-system" class="danger" disabled>Erase whole device</button>
+      </div>
+      <div class="field-row">
+        <label>Start sector <input type="text" id="erase-lba-start" value="0" class="mono"></label>
+        <label>Sectors <input type="text" id="erase-lba-count" value="0x2000" class="mono"></label>
+        <button id="btn-erase-lba" class="danger" disabled>Erase LBA range</button>
+      </div>
+      <div class="field-row">
+        <label>Chip select <input type="text" id="erase-blk-cs" value="0" class="mono"></label>
+        <label>Start block <input type="text" id="erase-blk-start" value="0" class="mono"></label>
+        <label>Blocks <input type="text" id="erase-blk-count" value="16" class="mono"></label>
+        <label class="check"><input type="checkbox" id="chk-erase-force"> Force</label>
+        <button id="btn-erase-block" class="danger" disabled>Erase blocks</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Bad blocks</h2>
+      <div class="field-row">
+        <label>Chip select <input type="text" id="bb-cs" value="0" class="mono"></label>
+        <label>Start block <input type="text" id="bb-start" value="0" class="mono"></label>
+        <label>Blocks <input type="text" id="bb-count" value="64" class="mono"></label>
+        <button id="btn-test-badblock" disabled>Scan</button>
+      </div>
+      <pre id="bb-out" class="out" hidden></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── Memory & LBA ───────────────────────── -->
+<section id="panel-memory" class="panel">
+  <div class="grid">
+    <div class="card">
+      <h2>Read sectors (RL)</h2>
+      <div class="field-row">
+        <label>Start sector <input type="text" id="rl-start" value="0" class="mono"></label>
+        <label>Sectors <input type="text" id="rl-count" value="1" class="mono"></label>
+        <button id="btn-read-lba" disabled>Read</button>
+        <button id="btn-save-lba" class="ghost" disabled>Save to file</button>
+      </div>
+      <pre id="rl-out" class="out hexdump" hidden></pre>
+    </div>
+
+    <div class="card">
+      <h2>Write sectors (WL)</h2>
+      <p class="hint danger">Writes the chosen file to a raw sector offset.</p>
+      <div class="field-row">
+        <label>Start sector <input type="text" id="wl-start" value="0" class="mono"></label>
+        <input type="file" id="file-wl">
+        <button id="btn-write-lba" class="danger" disabled>Write</button>
+      </div>
+      <div class="progress-wrap" hidden id="wl-progress-wrap">
+        <div class="progress"><div id="wl-progress" class="bar"></div></div>
+        <span id="wl-progress-label" class="mono">idle</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>DRAM</h2>
+      <p class="hint">
+        <code>ReadSdram</code> / <code>WriteSdram</code> / <code>ExecuteSdram</code>.
+        Executing jumps the chip to an address — it will stop responding.
+      </p>
+      <div class="field-row">
+        <label>Address <input type="text" id="sdram-addr" value="0x00000000" class="mono"></label>
+        <label>Length <input type="text" id="sdram-len" value="256" class="mono"></label>
+        <button id="btn-read-sdram" disabled>Read</button>
+      </div>
+      <div class="field-row">
+        <input type="file" id="file-sdram">
+        <button id="btn-write-sdram" class="danger" disabled>Write</button>
+        <button id="btn-exec-sdram" class="danger" disabled>Execute</button>
+      </div>
+      <pre id="sdram-out" class="out hexdump" hidden></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── eFuse ───────────────────────── -->
+<section id="panel-otp" class="panel">
+  <div class="card">
+    <h2>eFuse / OTP</h2>
+    <p class="hint danger">
+      <strong>One-time programmable.</strong> Writes here are permanent and can
+      make the chip unbootable or lock it into secure mode. Reading is safe.
+    </p>
+    <div class="field-row">
+      <label>Generation
+        <select id="sel-efuse-gen">
+          <option value="new" selected>New (0x23/0x24)</option>
+          <option value="legacy">Legacy (0x1f/0x20)</option>
+        </select>
+      </label>
+      <label>Address <input type="text" id="efuse-addr" value="0" class="mono"></label>
+      <label>Length <input type="text" id="efuse-len" value="32" class="mono"></label>
+      <button id="btn-read-efuse" disabled>Read</button>
+    </div>
+    <pre id="efuse-out" class="out hexdump" hidden></pre>
+    <details class="danger-zone">
+      <summary>Write eFuse (irreversible)</summary>
+      <div class="field-row">
+        <label>Hex bytes <input type="text" id="efuse-data" placeholder="deadbeef" class="mono wide-input"></label>
+        <label class="check"><input type="checkbox" id="chk-efuse-confirm"> I understand this is permanent</label>
+        <button id="btn-write-efuse" class="danger" disabled>Write eFuse</button>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ───────────────────────── Serial console ───────────────────────── -->
+<section id="panel-console" class="panel">
+  <div class="card">
+    <h2>UART console</h2>
+    <p class="hint">
+      Separate from flashing: this is the board's debug UART over Web Serial.
+      Rockchip boards default to 1500000 baud.
+    </p>
+    <div class="field-row">
+      <label>Baud <select id="sel-baud"></select></label>
+      <button id="btn-serial-connect">Open port</button>
+      <button id="btn-serial-disconnect" class="ghost" hidden>Close port</button>
+      <button id="btn-serial-clear" class="ghost">Clear</button>
+      <label class="check"><input type="checkbox" id="chk-serial-autoscroll" checked> Autoscroll</label>
+    </div>
+    <pre id="serial-out" class="terminal"></pre>
+    <div class="field-row">
+      <input type="text" id="serial-input" placeholder="type a command and press Enter" class="mono wide-input" disabled>
+      <button id="btn-serial-send" disabled>Send</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<section class="logpane">
+  <div class="loghead">
+    <h2>Log</h2>
+    <div class="row">
+      <button id="btn-log-copy" class="ghost small">Copy</button>
+      <button id="btn-log-clear" class="ghost small">Clear</button>
+    </div>
+  </div>
+  <pre id="log" class="out"></pre>
+</section>
+
+<footer>
+  <p>
+    Needs WebUSB — Chrome or Edge. On Windows the device must be bound to WinUSB
+    (use <a href="https://zadig.akeo.ie/" rel="noopener">Zadig</a>) because Rockchip's
+    own driver claims the interface. On Linux you may need a udev rule for vendor <code>2207</code>.
+  </p>
+  <p>
+    Protocol recovered from Rockchip <code>upgrade_tool</code> v2.17 ·
+    <a href="https://github.com/nnamon/lyra_webtool" rel="noopener">source</a>
+  </p>
+</footer>
+
+<script type="module">
+  import init from "./pkg/lyra_webtool.js";
+  init().catch((e) => {
+    const el = document.getElementById("compat");
+    el.hidden = false;
+    el.textContent = "Failed to start WebAssembly module: " + e;
+  });
+</script>
+</body>
+</html>

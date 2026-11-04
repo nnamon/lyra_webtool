@@ -1,0 +1,42 @@
+[package]
+name = "lyra-webtool"
+description = "Browser-based flasher for the Luckfox Lyra Zero W (Rockchip RK3506B)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rockusb = { path = "../crates/rockusb" }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+async-trait = "0.1"
+console_error_panic_hook = "0.1"
+md-5 = "0.10"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "console",
+  "Document", "Window", "Navigator", "Element", "HtmlElement", "Node", "NodeList",
+  "HtmlInputElement", "HtmlSelectElement", "HtmlButtonElement",
+  "HtmlTextAreaElement", "HtmlAnchorElement",
+  "Event", "EventTarget", "MouseEvent", "KeyboardEvent",
+  "File", "FileList", "Blob", "Url",
+  "DomTokenList", "CssStyleDeclaration", "Clipboard",
+  # WebUSB
+  "Usb", "UsbDevice", "UsbDeviceFilter", "UsbDeviceRequestOptions",
+  "UsbConfiguration", "UsbInterface", "UsbAlternateInterface",
+  "UsbEndpoint", "UsbDirection", "UsbEndpointType",
+  "UsbInTransferResult", "UsbOutTransferResult", "UsbTransferStatus",
+  "UsbControlTransferParameters", "UsbRequestType", "UsbRecipient",
+  # Web Serial
+  "Serial", "SerialPort", "SerialOptions", "SerialPortRequestOptions",
+  "ReadableStream", "WritableStream",
+  "ReadableStreamDefaultReader", "WritableStreamDefaultWriter",
+  "ReadableStreamReadResult",
+]
