@@ -80,8 +80,9 @@ This is the only route that adds packages, changes the kernel config, or
 changes the device tree.
 
 It follows Luckfox's own pages for the Lyra, moved into a container:
-[SDK image compilation](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation)
-and [SDK Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration).
+[SDK image compilation](https://wiki.luckfox.com/Luckfox-Lyra/SDK-Image-Compilation),
+[Buildroot configuration](https://wiki.luckfox.com/Luckfox-Lyra/Buildroot-Configuration)
+and [Device tree](https://wiki.luckfox.com/Luckfox-Lyra/Device-Tree).
 Take the Lyra pages rather than the Pico ones: the Pico Pro Max page gives the
 menuconfig target as `buildrootconfig`, which this SDK does not accept, and
 warns about uClibc, which this board does not use.
@@ -174,9 +175,9 @@ Every driver is built into the vendor kernel, so turning on SPI, I2C, PWM or a
 UART needs no kernel rebuild in principle. It needs one `status` change in the
 device tree inside `boot.img`.
 
-**Do not repack `boot.img` by hand.** A container repacked by
-`template/boot/` was flashed to a board and did not boot. Build it from the
-SDK instead, which packs and signs the FIT the same way the vendor's was:
+**Build `boot.img` from the SDK.** It packs and signs the FIT the way the
+vendor's was. Repacking the container by hand was tried and produced an image
+that did not boot, so that tooling was removed:
 
 ```sh
 cd template/sdk
@@ -193,21 +194,15 @@ Before reaching for any of it, check whether you need it: a pin that no
 enabled node claims is already usable as GPIO, and a userspace driver on
 those pins cannot stop the board booting.
 
-```sh
-cd template/boot
-./boot.sh roundtrip /path/to/boot.img    # prove pack is faithful first
-./boot.sh unpack    /path/to/boot.img
-./boot.sh enable-epaper-spi
-./boot.sh pack      ../images/boot.img
-```
-
 25 of the 60 nodes in the shipped device tree are disabled, including both
 SPI controllers, five of six UARTs, all ten PWMs, both CAN and both Ethernet.
 That is the Rockchip convention, not a fault: the SoC `.dtsi` disables
-everything and each board's `.dts` enables what it wires.
+everything and each board's `.dts` enables what it wires. This board's `.dts`
+calls itself `rockchip,rk3506g-demo-display-control` and enables a DSI panel
+and three touch controllers, so nothing on the 40-pin header is configured.
 
-See [../template/boot/README.md](../template/boot/README.md), which also
-covers the FIT signature question and the RM_IO pin matrix.
+To see what a running board has claimed, read `/sys/kernel/debug/pinctrl/`,
+which `/info/pinctrl` links to.
 
 ## WiFi on the Zero W
 

@@ -193,22 +193,18 @@ and refuses anything that is not ext4.
 
 ## Turning on a peripheral
 
-Every driver is built into the vendor kernel, so enabling SPI, I2C, PWM or a
-UART is a device tree change inside `boot.img`, not a kernel rebuild.
-`template/boot/` does that in Docker, but **the image it produces does not
-boot** on a Lyra Zero W and the cause is not yet known:
+A pin that no enabled device tree node claims is already usable as GPIO, so a
+userspace driver needs no firmware change and cannot stop the board booting.
+Check first, before changing anything.
 
-```sh
-cd template/boot
-./boot.sh roundtrip /path/to/boot.img    # prove the repack is faithful
-./boot.sh unpack    /path/to/boot.img
-./boot.sh enable-epaper-spi              # route SPI1 to a seated Pi HAT
-./boot.sh pack      ../images/boot.img
-```
+If you do need the device tree changed, build `boot.img` from the Luckfox SDK
+with `template/sdk/sdk.sh build kernel`. It packs the FIT the way the vendor's
+was. Repacking `boot.img` by hand produces an image that does not boot.
 
 `template/rootfs/epaper/` is a worked example: a Waveshare 2.7inch e-Paper
-HAT demo that starts at boot. The HAT seats on the Lyra header directly, with
-SPI1 routed to its pins through the RK3506 RM_IO matrix.
+HAT demo that starts at boot. The HAT seats on the Lyra header directly, and
+the demo drives all seven of its pins as plain GPIO, so the vendor `boot.img`
+is used unchanged.
 
 ## Building
 
@@ -241,7 +237,6 @@ app/                wasm crate
   app.rs  dom.rs      state, event wiring, DOM helpers
 www/                static site, the Pages artifact
 template/           pack an update.img from loose files
-  boot/               edit the device tree inside boot.img
   rootfs/             unpack and repack the UBI root filesystem
     cross/              cross-compile for the board, and check the ABI
     epaper/             2.7inch e-Paper HAT demo, starts at boot

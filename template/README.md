@@ -83,9 +83,13 @@ built from the vendor image, and the SDK only supplies the partitions you
 chose to rebuild. See [sdk/README.md](sdk/README.md).
 
 Turning on a peripheral the board does not enable by default, such as SPI for
-a HAT, is a device tree change inside `boot.img`. `boot/boot.sh` does that in
-Docker without the SDK, because every driver is already built into the vendor
-kernel. See [boot/README.md](boot/README.md).
+a HAT, is a device tree change inside `boot.img`. Build that from the SDK with
+`sdk/sdk.sh build kernel`, which packs the FIT the way the vendor's was.
+Repacking `boot.img` by hand produces an image that does not boot.
+
+Often you do not need it at all: a pin no enabled node claims is already
+usable as GPIO, and a userspace driver on those pins cannot stop the board
+booting. `rootfs/epaper/` works that way.
 
 [../docs/linux.md](../docs/linux.md) compares all three routes.
 

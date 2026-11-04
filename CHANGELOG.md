@@ -2,6 +2,12 @@
 
 User-visible changes to Lyra Web Tool, newest first. Each release is tagged `v<version>` with the same notes. The app shows this file as Version history.
 
+## 0.15.0 · 2026-11-05
+
+- Removed `template/boot/`. Repacking the `boot.img` FIT by hand produced an image that does not boot, and keeping a tool that fails is worse than not having one. Changing the device tree is the SDK's job: `template/sdk/sdk.sh build kernel` packs the FIT the way the vendor's was.
+- The e-Paper demo no longer depends on any firmware change. It drives all seven HAT pins as plain GPIO, all of which the stock device tree leaves unclaimed, so the vendor `boot.img` is used unchanged.
+- `docs/linux.md` now says to check whether a pin is already free before changing anything, and points at `/sys/kernel/debug/pinctrl/` for reading what a running board has claimed.
+
 ## 0.14.3 · 2026-11-05
 
 - The route for a device tree change is now the SDK, which packs and signs the FIT the way the vendor's was, rather than repacking `boot.img` by hand. Luckfox document the build on their SDK image compilation page and the files on their device tree page.

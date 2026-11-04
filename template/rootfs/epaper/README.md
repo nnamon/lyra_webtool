@@ -10,10 +10,12 @@ That is not a fallback, it is the recommended mode: every pin the HAT drives
 is a plain GPIO in the stock device tree, so it needs no `boot.img` change
 and cannot stop the board booting.
 
-The hardware SPI route in `../../boot/` produced a `boot.img` that does not
-boot on real hardware. Until that is understood, use bit-bang. The panel is
-write-only, a frame is 5808 bytes and a full refresh takes three seconds, so
-clocking it by hand costs nothing you can see.
+The panel is write-only, a frame is 5808 bytes and a full refresh takes three
+seconds, so clocking it by hand costs nothing you can see.
+
+If you do want hardware SPI, move SPI1 onto these pins in the device tree and
+build `boot.img` from the Luckfox SDK with `../../sdk/sdk.sh build kernel`.
+Do not repack `boot.img` by hand; that was tried and the board did not boot.
 
 ## Wiring
 
@@ -45,7 +47,7 @@ cp epaper.default ../files/etc/default/epaper
 cd .. && ./ubifs.sh apply && ./ubifs.sh pack rootfs.img
 ```
 
-Then patch `boot.img` as `../../boot/README.md` describes, and flash both.
+Flash the new `rootfs.img`. The vendor `boot.img` is used unchanged.
 
 ## Two incompatible panel revisions
 
@@ -106,6 +108,5 @@ Not verified on hardware: nothing here has met a real panel. The command
 sequences are Waveshare's own, and the pin mapping is derived from the
 datasheet and the board pinout, but no frame has been drawn on glass.
 
-The hardware SPI variant is worse than unverified: the `boot.img` it needs
-was flashed and did not boot. All seven HAT pins were confirmed free as plain
-GPIO in the stock device tree, which is why `--bitbang` is the default.
+All seven HAT pins were confirmed free as plain GPIO in the stock device
+tree, which is why `--bitbang` is the default and needs no `boot.img` at all.

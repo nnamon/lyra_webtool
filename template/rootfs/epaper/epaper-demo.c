@@ -2,9 +2,14 @@
  * Waveshare 2.7inch e-Paper HAT demo for the Luckfox Lyra Zero W.
  *
  * The HAT seats directly on the Lyra header: all 12 Raspberry Pi power and
- * ground pins line up. What does not line up is the SPI pinmux, so boot.img
- * is patched to route SPI1 through the RM_IO matrix onto the pins the HAT
- * drives. See ../../boot/patch-epaper-spi.py.
+ * ground pins line up. What does not line up is the SPI pinmux: the Pi puts
+ * MOSI on pin 19 and CE0 on pin 24, the Lyra's SPI1 puts them elsewhere. So
+ * the default is --bitbang, which clocks the panel from userspace GPIO. All
+ * seven pins are unclaimed in the stock device tree, so this needs no
+ * boot.img change and cannot stop the board booting.
+ *
+ * To use hardware SPI instead, move SPI1 onto these pins in the device tree
+ * and rebuild boot.img from the Luckfox SDK. Do not repack boot.img by hand.
  *
  *   HAT    Pi pin  Lyra pin   Linux GPIO  driven by
  *   VCC    1       3V3_OUT    -           -
@@ -12,10 +17,10 @@
  *   RST    11      GPIO0_A3   3           sysfs GPIO
  *   PWR    12      GPIO0_B6   14          sysfs GPIO, held high
  *   BUSY   18      GPIO0_B4   12          sysfs GPIO, input
- *   DIN    19      GPIO0_A6   6           SPI1_MOSI
+ *   DIN    19      GPIO0_A6   6           bit-banged, or SPI1_MOSI
  *   DC     22      GPIO0_B3   11          sysfs GPIO
- *   CLK    23      GPIO0_B0   8           SPI1_CLK
- *   CS     24      GPIO0_B2   10          SPI1_CSN0
+ *   CLK    23      GPIO0_B0   8           bit-banged, or SPI1_CLK
+ *   CS     24      GPIO0_B2   10          bit-banged, or SPI1_CSN0
  *
  * Two panel revisions exist and they are not compatible. V1 is a UC8151-class
  * controller programmed with power/booster/PLL commands and five waveform
@@ -462,8 +467,8 @@ static void splash(void)
     draw_centred(124, "2.7 INCH", 2);
     draw_centred(146, "E-PAPER", 2);
     fill(20, 172, EPD_W - 40, 2, 1);
-    draw_centred(188, "SPI1 VIA", 1);
-    draw_centred(202, "RM-IO MATRIX", 1);
+    draw_centred(188, "BIT-BANGED SPI", 1);
+    draw_centred(202, "ON PLAIN GPIO", 1);
     draw_centred(224, "HAT SEATED", 1);
     draw_centred(238, "NO JUMPERS", 1);
 }
